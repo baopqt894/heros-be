@@ -1,0 +1,205 @@
+# Swift integration contract
+
+## Response envelope
+
+Decode every HTTP response with the same top-level structure:
+
+```json
+{
+  "success": false,
+  "code": 401,
+  "data": {
+    "errorCode": "INVALID_CREDENTIALS",
+    "message": "Email or password is incorrect"
+  }
+}
+```
+
+`code` is the numeric HTTP status. Successful responses return their resource
+inside `data`; failed responses return `errorCode`, `message`, and optional
+`details` inside `data`.
+
+## Authentication
+
+Generate and persist one installation UUID in Keychain as `deviceId`.
+
+Registration step 1, request a registration OTP:
+
+```http
+POST /v1/auth/email/request-otp
+Content-Type: application/json
+
+{ "email": "user@example.com", "purpose": "register" }
+```
+
+Registration step 2, create the user and receive tokens:
+
+```http
+POST /v1/users
+Content-Type: application/json
+
+{
+  "email": "user@example.com",
+  "otp": "123456",
+  "deviceId": "persistent-installation-uuid",
+  "password": "Heros@Test123",
+  "fullName": "Nguyễn Văn A",
+  "dateOfBirth": "1995-08-20",
+  "gender": "male",
+  "phone": "+84901234567"
+}
+```
+
+`password` is optional for backward compatibility. When it was provided during
+registration, the user can subsequently log in without requesting an OTP:
+
+```http
+POST /v1/auth/login
+Content-Type: application/json
+
+{
+  "email": "user@example.com",
+  "password": "Heros@Test123",
+  "deviceId": "persistent-installation-uuid"
+}
+```
+
+For an existing user, request a login OTP with `purpose=login`, then verify it:
+
+```http
+POST /v1/auth/email/request-otp
+Content-Type: application/json
+
+{ "email": "user@example.com", "purpose": "login" }
+```
+
+```http
+POST /v1/auth/email/verify-otp
+Content-Type: application/json
+
+{
+  "email": "user@example.com",
+  "otp": "123456",
+  "deviceId": "persistent-installation-uuid"
+}
+```
+
+An OTP-only account can set a password, or an existing password account can
+reset it, using the same login OTP:
+
+```http
+POST /v1/auth/password/reset
+Content-Type: application/json
+
+{
+  "email": "user@example.com",
+  "otp": "123456",
+  "newPassword": "Heros@Test123",
+  "deviceId": "persistent-installation-uuid"
+}
+```
+
+Google Sign-In must send the ID token, not an authorization code or Google
+access token:
+
+```http
+POST /v1/auth/google
+Content-Type: application/json
+
+{
+  "idToken": "result.user.idToken.tokenString",
+  "deviceId": "persistent-installation-uuid"
+}
+```
+
+Configure Google Sign-In on iOS with the backend/server OAuth client ID so the
+ID token audience is accepted by `GOOGLE_CLIENT_IDS`.
+
+All three login methods return the same session payload. Store `accessToken` and
+`refreshToken` in Keychain. On HTTP 401, call
+`POST /v1/auth/refresh` once, replace both rotated tokens, then retry the original
+request once.
+
+## FCM registration
+
+After Firebase returns an FCM registration token:
+
+```http
+POST /v1/me/devices
+Authorization: Bearer <accessToken>
+Content-Type: application/json
+
+{
+  "deviceId": "persistent-installation-uuid",
+  "platform": "ios",
+  "pushToken": "firebase-registration-token"
+}
+```
+
+Repeat this request whenever Firebase rotates the token.
+
+## Create SOS
+
+Create a UUID once before the first attempt. Reuse it for every network retry:
+
+```http
+POST /v1/sos
+Authorization: Bearer <accessToken>
+Content-Type: application/json
+
+{
+  "clientRequestId": "125fe329-0bfd-428f-a69f-a9cefe22449e",
+  "message": "Tôi đang gặp nguy hiểm, hãy giúp tôi",
+  "location": {
+    "latitude": 10.762622,
+    "longitude": 106.660172,
+    "accuracy": 12,
+    "recordedAt": "2026-09-10T14:30:00.000Z"
+  }
+}
+```
+
+Use `data.smsPayload.recipients` and `data.smsPayload.message` to present the
+native SMS composer:
+
+```swift
+import MessageUI
+
+func presentSosMessage(
+    recipients: [String],
+    message: String,
+    from presenter: UIViewController,
+    delegate: MFMessageComposeViewControllerDelegate
+) {
+    guard MFMessageComposeViewController.canSendText() else { return }
+
+    let composer = MFMessageComposeViewController()
+    composer.messageComposeDelegate = delegate
+    composer.recipients = recipients
+    composer.body = message
+    presenter.present(composer, animated: true)
+}
+```
+
+After opening the composer, report only:
+
+```http
+PUT /v1/sos/:id/sms-status
+Authorization: Bearer <accessToken>
+Content-Type: application/json
+
+{ "status": "composer_opened" }
+```
+
+If the MessageUI delegate returns `.sent`, mobile may send
+`{ "status": "user_reported_sent" }`. This is not proof of carrier delivery.
+
+## Active tracking
+
+While an SOS is active:
+
+- send `PUT /v1/sos/:id/location` every 10-15 seconds only when location changes;
+- connect Socket.IO to namespace `/sos` with `auth: { token: accessToken }`;
+- stop background location immediately after resolve or cancel;
+- persist the active SOS ID and `clientRequestId` locally so app restarts recover
+  through `GET /v1/sos/active`.
