@@ -47,6 +47,15 @@ export class CreateEmergencyContactDto {
   @IsOptional()
   @IsBoolean()
   pushEnabled?: boolean;
+
+  @ApiPropertyOptional({
+    example: 'relative@example.com',
+    description:
+      'Email of an existing emergency_contact account to link for push alerts and in-app rescue.',
+  })
+  @IsOptional()
+  @IsEmail()
+  linkedUserEmail?: string;
 }
 
 export class UpdateEmergencyContactDto extends PartialType(

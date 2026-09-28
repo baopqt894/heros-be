@@ -46,6 +46,31 @@ class SosRecipient {
 
 const SosRecipientSchema = SchemaFactory.createForClass(SosRecipient);
 
+@Schema({ _id: true, timestamps: false, versionKey: false })
+export class SosRecording {
+  _id: Types.ObjectId;
+
+  @Prop({ ref: 'User', required: true, type: MongooseSchema.Types.ObjectId })
+  uploaderId: Types.ObjectId;
+
+  @Prop({ required: true })
+  storageKey: string;
+
+  @Prop({ required: true })
+  mimeType: string;
+
+  @Prop({ min: 1, required: true })
+  sizeBytes: number;
+
+  @Prop({ max: 120, min: 0.1, required: true })
+  durationSeconds: number;
+
+  @Prop({ required: true })
+  createdAt: Date;
+}
+
+const SosRecordingSchema = SchemaFactory.createForClass(SosRecording);
+
 @Schema({ collection: 'sos_events', timestamps: true, versionKey: false })
 export class SosEvent {
   @Prop({
@@ -79,6 +104,12 @@ export class SosEvent {
 
   @Prop({ default: [], type: [SosRecipientSchema] })
   recipients: SosRecipient[];
+
+  @Prop({ default: [], type: [SosRecordingSchema] })
+  recordings: SosRecording[];
+
+  @Prop({ default: 0, min: 0 })
+  recordingBytes: number;
 
   @Prop({
     default: 'not_opened',

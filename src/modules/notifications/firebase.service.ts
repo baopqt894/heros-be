@@ -29,7 +29,11 @@ export class FirebaseService {
     }
   }
 
-  async sendSos(tokens: string[], data: Record<string, string>) {
+  async send(
+    tokens: string[],
+    data: Record<string, string>,
+    title = 'Heros SOS'
+  ) {
     if (!this.client || !this.projectId || !tokens.length) {
       return { sent: 0, failed: 0, disabled: !this.client };
     }
@@ -43,7 +47,7 @@ export class FirebaseService {
         tokens
           .slice(offset, offset + 10)
           .map((token) =>
-            this.sendOne(accessToken.token as string, token, data)
+            this.sendOne(accessToken.token as string, token, data, title)
           )
       );
       sent += results.filter((result) => result.status === 'fulfilled').length;
@@ -55,7 +59,8 @@ export class FirebaseService {
   private async sendOne(
     accessToken: string,
     token: string,
-    data: Record<string, string>
+    data: Record<string, string>,
+    title: string
   ) {
     const response = await fetch(
       `https://fcm.googleapis.com/v1/projects/${this.projectId}/messages:send`,
@@ -68,7 +73,7 @@ export class FirebaseService {
         body: JSON.stringify({
           message: {
             token,
-            notification: { title: 'Tín hiệu SOS', body: data.message },
+            notification: { title, body: data.message },
             data,
             android: { priority: 'high' },
             apns: {

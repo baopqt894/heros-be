@@ -64,6 +64,8 @@ GET    /v1/sos/active
 GET    /v1/sos/:id
 PUT    /v1/sos/:id/location
 POST   /v1/sos/:id/acknowledge
+POST   /v1/sos/:id/recordings
+GET    /v1/sos/:id/recordings/:recordingId
 POST   /v1/sos/:id/resolve
 POST   /v1/sos/:id/cancel
 PUT    /v1/sos/:id/sms-status
@@ -93,6 +95,12 @@ Heros account directly.
 
 ## SOS and SMS
 
+Accounts have one of three roles: `device_owner`, `emergency_contact`, or
+`community_responder`. Only a `device_owner` can create an SOS. Emergency
+contacts are linked to an existing `emergency_contact` account with
+`linkedUserEmail`; nearby discovery only includes opted-in
+`community_responder` accounts.
+
 `POST /v1/sos` is idempotent for `(ownerId, clientRequestId)`. Mobile must reuse
 the same UUID when retrying a request. The response contains `smsPayload` with
 phone recipients and a prebuilt message. Swift opens the native SMS composer;
@@ -100,7 +108,14 @@ the backend never claims carrier delivery.
 
 Automatic alerts are sent through FCM to nearby opted-in responder users and by
 email to contacts with email enabled. Socket.IO emits `sos.created`, `sos.location`,
-`sos.acknowledged`, `sos.resolved` and `sos.cancelled`.
+`sos.acknowledged`, `sos.recording`, `sos.resolved` and `sos.cancelled`.
+
+An alerted user initially receives only the SOS summary. After calling
+`POST /v1/sos/:id/acknowledge`, that user can read the current location, receive
+live `sos.location` events, see recording metadata and stream protected audio.
+Audio is never exposed through the public static-file directory. Each clip is
+limited to 10 MiB and its declared duration is limited to 120 seconds. One SOS
+can contain up to 20 clips and 100 MiB total audio.
 
 See [Swift integration](docs/SWIFT_INTEGRATION.md).
 

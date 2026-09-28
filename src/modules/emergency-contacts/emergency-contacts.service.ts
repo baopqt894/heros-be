@@ -13,12 +13,14 @@ import {
   EmergencyContact,
   EmergencyContactDocument,
 } from './schemas/emergency-contact.schema';
+import { UsersService } from '../users/users.service';
 
 @Injectable()
 export class EmergencyContactsService {
   constructor(
     @InjectModel(EmergencyContact.name)
-    private readonly contactModel: Model<EmergencyContactDocument>
+    private readonly contactModel: Model<EmergencyContactDocument>,
+    private readonly usersService: UsersService
   ) {}
 
   list(ownerId: string) {
@@ -32,17 +34,24 @@ export class EmergencyContactsService {
     if (!dto.phone && !dto.email) {
       throw new BadRequestException('At least one contact channel is required');
     }
+    const linkedUserId = await this.resolveLinkedUser(dto.linkedUserEmail);
+    const { linkedUserEmail: _linkedUserEmail, ...contact } = dto;
     return this.contactModel.create({
-      ...dto,
+      ...contact,
       ownerId: new Types.ObjectId(ownerId),
       email: dto.email?.trim().toLowerCase(),
+      linkedUserId,
     });
   }
 
   async update(ownerId: string, id: string, dto: UpdateEmergencyContactDto) {
     this.assertObjectId(id);
-    const update: Record<string, unknown> = { ...dto };
+    const { linkedUserEmail, ...contactFields } = dto;
+    const update: Record<string, unknown> = { ...contactFields };
     if (dto.email) update.email = dto.email.trim().toLowerCase();
+    if (linkedUserEmail) {
+      update.linkedUserId = await this.resolveLinkedUser(linkedUserEmail);
+    }
     const contact = await this.contactModel.findOneAndUpdate(
       { _id: id, ownerId },
       { $set: update },
@@ -64,5 +73,17 @@ export class EmergencyContactsService {
     if (!Types.ObjectId.isValid(id)) {
       throw new NotFoundException('Emergency contact not found');
     }
+  }
+
+  private async resolveLinkedUser(email?: string) {
+    if (!email) return undefined;
+    const user = await this.usersService.findByEmail(email);
+    if (!user) {
+      throw new BadRequestException({ code: 'LINKED_USER_NOT_FOUND' });
+    }
+    if (user.userType !== 'emergency_contact') {
+      throw new BadRequestException({ code: 'LINKED_USER_TYPE_INVALID' });
+    }
+    return user._id;
   }
 }

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   HttpException,
   HttpStatus,
@@ -19,6 +20,7 @@ import { OAuth2Client } from 'google-auth-library';
 import { Model, Types } from 'mongoose';
 import { UsersService } from '../users/users.service';
 import { UserDocument } from '../users/schemas/user.schema';
+import { UserType } from '../users/user-type';
 import { EmailService } from './email.service';
 import { RegisterUserDto } from './dto/register-user.dto';
 import { PasswordService } from './password.service';
@@ -125,6 +127,7 @@ export class AuthService {
         gender: dto.gender,
         phone: dto.phone,
         passwordHash,
+        userType: dto.userType,
       });
     } catch (error: any) {
       if (error?.code === 11000) {
@@ -202,7 +205,7 @@ export class AuthService {
     if (!consumed.modifiedCount) throw this.invalidOtp();
   }
 
-  async googleLogin(idToken: string, deviceId: string) {
+  async googleLogin(idToken: string, deviceId: string, userType?: UserType) {
     const audiences = (this.config.get<string>('GOOGLE_CLIENT_IDS') || '')
       .split(',')
       .map((value) => value.trim())
@@ -232,7 +235,12 @@ export class AuthService {
       if (user?.googleSubject && user.googleSubject !== payload.sub) {
         throw new ConflictException({ code: 'GOOGLE_IDENTITY_CONFLICT' });
       }
-      if (!user) user = await this.usersService.createEmailUser(email);
+      if (!user) {
+        if (!userType) {
+          throw new BadRequestException({ code: 'USER_TYPE_REQUIRED' });
+        }
+        user = await this.usersService.createEmailUser(email, { userType });
+      }
       user.googleSubject = payload.sub;
       if (!user.fullName && payload.name) user.fullName = payload.name;
       if (!user.avatarUrl && payload.picture) user.avatarUrl = payload.picture;

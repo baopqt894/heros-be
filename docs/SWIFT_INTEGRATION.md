@@ -46,9 +46,24 @@ Content-Type: application/json
   "fullName": "Nguyễn Văn A",
   "dateOfBirth": "1995-08-20",
   "gender": "male",
-  "phone": "+84901234567"
+  "phone": "+84901234567",
+  "userType": "device_owner"
 }
 ```
+
+`userType` is required when creating an account and is one of:
+
+- `device_owner`: owns the HEROS device and can create SOS events;
+- `emergency_contact`: a relative or friend linked to a device owner;
+- `community_responder`: an opted-in community helper discoverable by location.
+
+For a first-time Google login, send the same `userType` field to
+`POST /v1/auth/google`. Existing Google accounts do not need to resend it.
+
+To enable a relative to receive the SOS inside the app, create or update the
+owner's emergency contact with `linkedUserEmail` set to the email of an existing
+`emergency_contact` account. A plain phone/email contact can still receive the
+SMS composer message or email, but cannot accept the SOS in-app.
 
 `password` is optional for backward compatibility. When it was provided during
 registration, the user can subsequently log in without requesting an OTP:
@@ -203,3 +218,48 @@ While an SOS is active:
 - stop background location immediately after resolve or cancel;
 - persist the active SOS ID and `clientRequestId` locally so app restarts recover
   through `GET /v1/sos/active`.
+
+## Accepting an SOS and protected information
+
+Before acceptance, `GET /v1/sos/:id` returns the basic alert but omits
+`currentLocation` and `recordings`. When a linked relative or nearby community
+responder chooses to help, call:
+
+```http
+POST /v1/sos/:id/acknowledge
+Authorization: Bearer <accessToken>
+```
+
+The response then contains `currentLocation`, `recordings`,
+`viewerAcknowledged=true`, and the total `responderCount`. Keep the `/sos`
+Socket.IO connection open to receive later `sos.location` and `sos.recording`
+events. Multiple recipients may accept the same SOS; repeated acceptance by the
+same user is idempotent.
+
+## SOS voice recordings
+
+The device owner's app may upload multiple audio clips while the SOS is active:
+
+```http
+POST /v1/sos/:id/recordings
+Authorization: Bearer <accessToken>
+Content-Type: multipart/form-data
+
+audio=<binary audio file>
+durationSeconds=8.4
+```
+
+Supported types are AAC, M4A/MP4 audio, MP3, OGG and WAV. A clip is limited to
+10 MiB, and the declared duration must not exceed 120 seconds. The server
+validates both the declared MIME type and the file signature. One SOS accepts
+up to 20 clips and 100 MiB of audio in total.
+
+An acknowledged helper streams a clip using its `playbackPath`, for example:
+
+```http
+GET /v1/sos/:id/recordings/:recordingId
+Authorization: Bearer <accessToken>
+```
+
+This endpoint returns raw audio rather than the JSON envelope. It requires the
+owner or a recipient who has already acknowledged the SOS.

@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument } from 'mongoose';
+import { UserType } from '../user-type';
 
 export type UserDocument = HydratedDocument<User>;
 
@@ -48,6 +49,14 @@ export class User {
 
   @Prop({ trim: true })
   phone?: string;
+
+  @Prop({
+    default: 'device_owner',
+    enum: ['device_owner', 'emergency_contact', 'community_responder'],
+    index: true,
+    required: true,
+  })
+  userType: UserType;
 
   @Prop({ default: false })
   responderEnabled: boolean;

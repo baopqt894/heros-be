@@ -4,6 +4,9 @@ node_modules/
 # Build output
 dist/
 
+# Private SOS audio files
+private_uploads/
+
 # Environment variables
 .env
 

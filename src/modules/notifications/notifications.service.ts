@@ -32,17 +32,42 @@ export class NotificationsService {
     });
   }
 
+  dispatchPush(
+    pushUserIds: string[],
+    data: Record<string, string>,
+    title = 'Heros SOS'
+  ) {
+    void this.performPush(pushUserIds, data, title).catch((error) => {
+      this.logger.error('Push notification dispatch failed', error);
+    });
+  }
+
+  private async performPush(
+    pushUserIds: string[],
+    data: Record<string, string>,
+    title: string
+  ) {
+    const tokens = await this.devicesService.findPushTokens([
+      ...new Set(pushUserIds),
+    ]);
+    return this.firebaseService.send(tokens, data, title);
+  }
+
   private async performDispatch(input: SosNotificationInput) {
     const tokens = await this.devicesService.findPushTokens([
       ...new Set(input.pushUserIds),
     ]);
     const tasks: Promise<unknown>[] = [
-      this.firebaseService.sendSos(tokens, {
-        type: 'SOS_CREATED',
-        sosId: input.eventId,
-        code: input.code,
-        message: `${input.ownerName}: ${input.message}`,
-      }),
+      this.firebaseService.send(
+        tokens,
+        {
+          type: 'SOS_CREATED',
+          sosId: input.eventId,
+          code: input.code,
+          message: `${input.ownerName}: ${input.message}`,
+        },
+        'Tín hiệu SOS'
+      ),
       ...[...new Set(input.emails)].map((email) =>
         this.emailService.sendSos(email, input)
       ),

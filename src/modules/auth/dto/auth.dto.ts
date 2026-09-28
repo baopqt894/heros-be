@@ -8,6 +8,7 @@ import {
   MaxLength,
   MinLength,
 } from 'class-validator';
+import { USER_TYPES, UserType } from '../../users/user-type';
 
 export class RequestEmailOtpDto {
   @ApiProperty({ example: 'user@example.com' })
@@ -43,6 +44,14 @@ export class GoogleLoginDto {
   @MinLength(8)
   @MaxLength(200)
   deviceId: string;
+
+  @ApiPropertyOptional({
+    enum: USER_TYPES,
+    description: 'Required only when Google Sign-In creates a new account.',
+  })
+  @IsOptional()
+  @IsIn(USER_TYPES)
+  userType?: UserType;
 }
 
 export class PasswordLoginDto {

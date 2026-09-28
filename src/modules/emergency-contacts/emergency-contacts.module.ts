@@ -6,9 +6,11 @@ import {
   EmergencyContact,
   EmergencyContactSchema,
 } from './schemas/emergency-contact.schema';
+import { UsersModule } from '../users/users.module';
 
 @Module({
   imports: [
+    UsersModule,
     MongooseModule.forFeature([
       { name: EmergencyContact.name, schema: EmergencyContactSchema },
     ]),

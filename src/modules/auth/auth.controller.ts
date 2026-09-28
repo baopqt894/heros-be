@@ -83,7 +83,11 @@ export class AuthController {
     this.rateLimit.consume(`google:ip:${request.ip}`, 30, 15 * 60_000);
     return {
       success: true,
-      data: await this.authService.googleLogin(dto.idToken, dto.deviceId),
+      data: await this.authService.googleLogin(
+        dto.idToken,
+        dto.deviceId,
+        dto.userType
+      ),
     };
   }
 

@@ -1,15 +1,28 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+  OnModuleInit,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdateLocationDto } from './dto/update-location.dto';
 import { User, UserDocument } from './schemas/user.schema';
+import { UserType } from './user-type';
 
 @Injectable()
-export class UsersService {
+export class UsersService implements OnModuleInit {
   constructor(
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>
   ) {}
+
+  async onModuleInit() {
+    await this.userModel.updateMany(
+      { userType: { $exists: false } },
+      { $set: { userType: 'device_owner' } }
+    );
+  }
 
   findById(id: string) {
     if (!Types.ObjectId.isValid(id)) return null;
@@ -39,6 +52,7 @@ export class UsersService {
       gender?: string;
       phone?: string;
       passwordHash?: string;
+      userType?: UserType;
     } = {}
   ) {
     return this.userModel.create({
@@ -51,6 +65,7 @@ export class UsersService {
       gender: profile.gender,
       phone: profile.phone,
       passwordHash: profile.passwordHash,
+      userType: profile.userType,
     });
   }
 
@@ -62,6 +77,14 @@ export class UsersService {
   }
 
   async updateMe(id: string, dto: UpdateUserDto) {
+    if (dto.responderEnabled) {
+      const existing = await this.getMe(id);
+      if (existing.userType !== 'community_responder') {
+        throw new BadRequestException({
+          code: 'COMMUNITY_RESPONDER_ACCOUNT_REQUIRED',
+        });
+      }
+    }
     const update: Record<string, unknown> = { ...dto };
     if (dto.dateOfBirth) update.dateOfBirth = new Date(dto.dateOfBirth);
     const user = await this.userModel
@@ -119,6 +142,7 @@ export class UsersService {
       .find({
         _id: { $ne: new Types.ObjectId(ownerId) },
         status: 'active',
+        userType: 'community_responder',
         responderEnabled: true,
         'lastLocation.recordedAt': {
           $gt: new Date(Date.now() - 30 * 60_000),

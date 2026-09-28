@@ -10,6 +10,7 @@ import {
   IsString,
   IsUUID,
   MaxLength,
+  Max,
   Min,
   ValidateNested,
 } from 'class-validator';
@@ -63,4 +64,18 @@ export class CancelSosDto {
   @IsString()
   @MaxLength(200)
   reason?: string;
+}
+
+export class UploadSosRecordingDto {
+  @ApiProperty({
+    example: 8.4,
+    description: 'Audio duration reported by the recording client.',
+    maximum: 120,
+    minimum: 0.1,
+  })
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0.1)
+  @Max(120)
+  durationSeconds: number;
 }

@@ -1,13 +1,18 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   HttpException,
   HttpStatus,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
-import { randomBytes } from 'node:crypto';
+import { createReadStream } from 'node:fs';
+import { access, mkdir, unlink, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { Model, Types } from 'mongoose';
 import { EmergencyContactsService } from '../emergency-contacts/emergency-contacts.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -17,24 +22,38 @@ import {
   CreateSosDto,
   UpdateSmsStatusDto,
   UpdateSosLocationDto,
+  UploadSosRecordingDto,
 } from './dto/sos.dto';
 import { SosEvent, SosEventDocument } from './schemas/sos-event.schema';
 import { SosGateway } from './sos.gateway';
 
 const ACTIVE_STATUSES = ['active', 'acknowledged'];
+const MAX_RECORDINGS_PER_SOS = 20;
+const MAX_RECORDING_BYTES_PER_SOS = 100 * 1024 * 1024;
 
 @Injectable()
 export class SosService {
+  private readonly recordingsDirectory: string;
+
   constructor(
     @InjectModel(SosEvent.name)
     private readonly sosModel: Model<SosEventDocument>,
     private readonly usersService: UsersService,
     private readonly contactsService: EmergencyContactsService,
     private readonly notificationsService: NotificationsService,
-    private readonly gateway: SosGateway
-  ) {}
+    private readonly gateway: SosGateway,
+    config: ConfigService
+  ) {
+    this.recordingsDirectory =
+      config.get<string>('SOS_RECORDINGS_DIR') ||
+      join(process.cwd(), 'private_uploads', 'sos-recordings');
+  }
 
   async create(ownerId: string, dto: CreateSosDto) {
+    const owner = await this.usersService.getMe(ownerId);
+    if (owner.userType !== 'device_owner') {
+      throw new ForbiddenException({ code: 'SOS_DEVICE_OWNER_REQUIRED' });
+    }
     const existing = await this.sosModel.findOne({
       ownerId,
       clientRequestId: dto.clientRequestId,
@@ -65,8 +84,7 @@ export class SosService {
       throw new BadRequestException({ code: 'LOCATION_TIME_INVALID' });
     }
 
-    const [owner, contacts, nearby] = await Promise.all([
-      this.usersService.getMe(ownerId),
+    const [contacts, nearby] = await Promise.all([
       this.contactsService.list(ownerId),
       this.usersService.findNearbyResponders(
         ownerId,
@@ -76,10 +94,12 @@ export class SosService {
       ),
     ]);
     const seenUsers = new Set<string>();
+    const pushUserIds = new Set<string>();
     const recipients: Array<Record<string, unknown>> = [];
     for (const contact of contacts) {
       const linkedUserId = contact.linkedUserId?.toString();
       if (linkedUserId) seenUsers.add(linkedUserId);
+      if (contact.pushEnabled && linkedUserId) pushUserIds.add(linkedUserId);
       recipients.push({
         type: 'emergency_contact',
         userId: contact.linkedUserId,
@@ -97,6 +117,7 @@ export class SosService {
       const responderId = responder._id.toString();
       if (seenUsers.has(responderId)) continue;
       seenUsers.add(responderId);
+      pushUserIds.add(responderId);
       recipients.push({
         type: 'nearby_responder',
         userId: responder._id,
@@ -144,7 +165,7 @@ export class SosService {
       ownerName: owner.fullName || owner.email,
       message: event.message,
       mapUrl,
-      pushUserIds: [...seenUsers],
+      pushUserIds: [...pushUserIds],
       emails: contacts
         .filter((contact) => contact.emailEnabled && contact.email)
         .map((contact) => contact.email),
@@ -155,7 +176,6 @@ export class SosService {
         code: event.code,
         ownerName: owner.fullName || 'Một người dùng',
         message: event.message,
-        location,
       });
     }
     return this.toMobileResponse(event);
@@ -170,7 +190,7 @@ export class SosService {
 
   async getOne(userId: string, id: string) {
     const event = await this.findAccessible(userId, id);
-    return this.toMobileResponse(event, event.ownerId.toString() === userId);
+    return this.toMobileResponse(event, userId);
   }
 
   async updateLocation(ownerId: string, id: string, dto: UpdateSosLocationDto) {
@@ -187,17 +207,36 @@ export class SosService {
       { new: true, runValidators: true }
     );
     if (!event) throw new NotFoundException('Active SOS event not found');
-    this.notifyRecipients(event, 'sos.location', { sosId: id, location });
+    this.notifyAcknowledgedRecipients(event, 'sos.location', {
+      sosId: id,
+      location,
+    });
     return this.toMobileResponse(event);
   }
 
   async acknowledge(userId: string, id: string) {
     this.assertObjectId(id);
-    const event = await this.sosModel.findOneAndUpdate(
+    const existing = await this.findAccessible(userId, id);
+    const existingRecipient = existing.recipients.find(
+      (recipient) => recipient.userId?.toString() === userId
+    );
+    if (!existingRecipient) {
+      throw new ForbiddenException({ code: 'SOS_RECIPIENT_REQUIRED' });
+    }
+    if (existingRecipient.acknowledgedAt) {
+      return this.toMobileResponse(existing, userId);
+    }
+
+    let event = await this.sosModel.findOneAndUpdate(
       {
         _id: id,
         status: { $in: ACTIVE_STATUSES },
-        'recipients.userId': new Types.ObjectId(userId),
+        recipients: {
+          $elemMatch: {
+            userId: new Types.ObjectId(userId),
+            acknowledgedAt: { $exists: false },
+          },
+        },
       },
       {
         $set: {
@@ -206,16 +245,146 @@ export class SosService {
         },
       },
       {
-        arrayFilters: [{ 'recipient.userId': new Types.ObjectId(userId) }],
+        arrayFilters: [
+          {
+            'recipient.userId': new Types.ObjectId(userId),
+            'recipient.acknowledgedAt': { $exists: false },
+          },
+        ],
         new: true,
       }
     );
+    if (!event) {
+      event = await this.sosModel.findById(id);
+    }
     if (!event) throw new NotFoundException('SOS event not found');
-    this.gateway.notifyUser(event.ownerId.toString(), 'sos.acknowledged', {
+    const acknowledged = event.recipients.some(
+      (recipient) =>
+        recipient.userId?.toString() === userId &&
+        Boolean(recipient.acknowledgedAt)
+    );
+    if (!acknowledged) {
+      throw new NotFoundException('Active SOS event not found');
+    }
+    const responderCount = this.responderCount(event);
+    const payload = {
       sosId: event._id,
       userId,
+      responderCount,
+    };
+    this.gateway.notifyUser(
+      event.ownerId.toString(),
+      'sos.acknowledged',
+      payload
+    );
+    this.notifyRecipients(event, 'sos.acknowledged', payload);
+    return this.toMobileResponse(event, userId);
+  }
+
+  async addRecording(
+    ownerId: string,
+    id: string,
+    file: { buffer: Buffer; mimetype: string; size: number },
+    dto: UploadSosRecordingDto
+  ) {
+    this.assertObjectId(id);
+    this.validateAudioFile(file);
+    const storageKey = `${randomUUID()}${this.extensionFor(file.mimetype)}`;
+    await mkdir(this.recordingsDirectory, { recursive: true });
+    const filePath = join(this.recordingsDirectory, storageKey);
+    await writeFile(filePath, file.buffer, { flag: 'wx', mode: 0o600 });
+
+    const recording = {
+      _id: new Types.ObjectId(),
+      uploaderId: new Types.ObjectId(ownerId),
+      storageKey,
+      mimeType: file.mimetype,
+      sizeBytes: file.size,
+      durationSeconds: dto.durationSeconds,
+      createdAt: new Date(),
+    };
+    let event: SosEventDocument | null;
+    try {
+      event = await this.sosModel.findOneAndUpdate(
+        {
+          _id: id,
+          ownerId,
+          status: { $in: ACTIVE_STATUSES },
+          [`recordings.${MAX_RECORDINGS_PER_SOS - 1}`]: { $exists: false },
+          $or: [
+            { recordingBytes: { $exists: false } },
+            {
+              recordingBytes: {
+                $lte: MAX_RECORDING_BYTES_PER_SOS - file.size,
+              },
+            },
+          ],
+        },
+        {
+          $push: { recordings: recording },
+          $inc: { recordingBytes: file.size },
+        },
+        { new: true, runValidators: true }
+      );
+    } catch (error) {
+      await unlink(filePath).catch(() => undefined);
+      throw error;
+    }
+    if (!event) {
+      await unlink(filePath).catch(() => undefined);
+      const activeEvent = await this.sosModel.exists({
+        _id: id,
+        ownerId,
+        status: { $in: ACTIVE_STATUSES },
+      });
+      if (activeEvent) {
+        throw new ConflictException({ code: 'SOS_RECORDING_LIMIT_REACHED' });
+      }
+      throw new NotFoundException('Active SOS event not found');
+    }
+
+    const metadata = this.recordingResponse(id, recording);
+    const acknowledgedIds = this.acknowledgedRecipientIds(event);
+    this.notifyAcknowledgedRecipients(event, 'sos.recording', {
+      sosId: id,
+      recording: metadata,
     });
-    return this.toMobileResponse(event, false);
+    this.notificationsService.dispatchPush(
+      acknowledgedIds,
+      {
+        type: 'SOS_RECORDING_AVAILABLE',
+        sosId: id,
+        recordingId: recording._id.toString(),
+        message: 'Có bản ghi âm mới từ người cần hỗ trợ',
+      },
+      'Bản ghi âm SOS mới'
+    );
+    return metadata;
+  }
+
+  async openRecording(userId: string, id: string, recordingId: string) {
+    this.assertObjectId(id);
+    this.assertObjectId(recordingId);
+    const event = await this.sosModel.findById(id);
+    if (!event) throw new NotFoundException('SOS event not found');
+    if (!this.canAccessSensitive(event, userId)) {
+      throw new ForbiddenException({ code: 'SOS_ACKNOWLEDGEMENT_REQUIRED' });
+    }
+    const recording = event.recordings?.find(
+      (item) => item._id.toString() === recordingId
+    );
+    if (!recording) throw new NotFoundException('SOS recording not found');
+    const filePath = join(this.recordingsDirectory, recording.storageKey);
+    try {
+      await access(filePath);
+    } catch {
+      throw new NotFoundException('SOS recording file not found');
+    }
+    return {
+      stream: createReadStream(filePath),
+      mimeType: recording.mimeType,
+      sizeBytes: recording.sizeBytes,
+    };
   }
 
   async resolve(ownerId: string, id: string) {
@@ -286,7 +455,20 @@ export class SosService {
     ids.forEach((userId) => this.gateway.notifyUser(userId, name, payload));
   }
 
-  private toMobileResponse(event: SosEventDocument, includePrivate = true) {
+  private notifyAcknowledgedRecipients(
+    event: SosEventDocument,
+    name: string,
+    payload: unknown
+  ) {
+    this.acknowledgedRecipientIds(event).forEach((userId) =>
+      this.gateway.notifyUser(userId, name, payload)
+    );
+  }
+
+  private toMobileResponse(event: SosEventDocument, viewerId?: string) {
+    const isOwner = !viewerId || event.ownerId.toString() === viewerId;
+    const canAccessSensitive =
+      isOwner || this.canAccessSensitive(event, viewerId);
     const [longitude, latitude] = event.currentLocation.coordinates;
     const phones = event.recipients
       .filter(
@@ -298,13 +480,26 @@ export class SosService {
       code: event.code,
       status: event.status,
       message: event.message,
-      currentLocation: event.currentLocation,
       startedAt: event.startedAt,
       resolvedAt: event.resolvedAt,
       cancelledAt: event.cancelledAt,
       cancelReason: event.cancelReason,
+      responderCount: this.responderCount(event),
+      viewerAcknowledged: isOwner
+        ? false
+        : event.recipients.some(
+            (recipient) =>
+              recipient.userId?.toString() === viewerId &&
+              Boolean(recipient.acknowledgedAt)
+          ),
     };
-    if (includePrivate) {
+    if (canAccessSensitive) {
+      response.currentLocation = event.currentLocation;
+      response.recordings = (event.recordings || []).map((recording) =>
+        this.recordingResponse(event._id.toString(), recording)
+      );
+    }
+    if (isOwner) {
       response.recipients = event.recipients;
       response.smsStatus = event.smsStatus;
       response.smsPayload = {
@@ -313,6 +508,94 @@ export class SosService {
       };
     }
     return response;
+  }
+
+  private canAccessSensitive(event: SosEventDocument, userId?: string) {
+    if (!userId) return true;
+    if (event.ownerId.toString() === userId) return true;
+    return event.recipients.some(
+      (recipient) =>
+        recipient.userId?.toString() === userId &&
+        Boolean(recipient.acknowledgedAt)
+    );
+  }
+
+  private acknowledgedRecipientIds(event: SosEventDocument) {
+    return event.recipients
+      .filter((recipient) => recipient.acknowledgedAt && recipient.userId)
+      .map((recipient) => recipient.userId.toString());
+  }
+
+  private responderCount(event: SosEventDocument) {
+    return this.acknowledgedRecipientIds(event).length;
+  }
+
+  private recordingResponse(
+    sosId: string,
+    recording: {
+      _id: Types.ObjectId;
+      mimeType: string;
+      sizeBytes: number;
+      durationSeconds: number;
+      createdAt: Date;
+    }
+  ) {
+    return {
+      id: recording._id,
+      mimeType: recording.mimeType,
+      sizeBytes: recording.sizeBytes,
+      durationSeconds: recording.durationSeconds,
+      createdAt: recording.createdAt,
+      playbackPath: `/v1/sos/${sosId}/recordings/${recording._id.toString()}`,
+    };
+  }
+
+  private extensionFor(mimeType: string) {
+    const extensions: Record<string, string> = {
+      'audio/aac': '.aac',
+      'audio/m4a': '.m4a',
+      'audio/mp4': '.m4a',
+      'audio/mpeg': '.mp3',
+      'audio/ogg': '.ogg',
+      'audio/wav': '.wav',
+      'audio/x-m4a': '.m4a',
+    };
+    const extension = extensions[mimeType];
+    if (!extension) {
+      throw new BadRequestException({ code: 'SOS_AUDIO_TYPE_INVALID' });
+    }
+    return extension;
+  }
+
+  private validateAudioFile(file: {
+    buffer: Buffer;
+    mimetype: string;
+    size: number;
+  }) {
+    if (!file.buffer?.length || file.size < 1) {
+      throw new BadRequestException({ code: 'SOS_AUDIO_EMPTY' });
+    }
+    const bytes = file.buffer;
+    const signatures: Record<string, boolean> = {
+      'audio/aac':
+        bytes.length >= 2 && bytes[0] === 0xff && (bytes[1] & 0xf6) === 0xf0,
+      'audio/m4a':
+        bytes.length >= 12 && bytes.toString('ascii', 4, 8) === 'ftyp',
+      'audio/mp4':
+        bytes.length >= 12 && bytes.toString('ascii', 4, 8) === 'ftyp',
+      'audio/mpeg':
+        bytes.subarray(0, 3).toString('ascii') === 'ID3' ||
+        (bytes.length >= 2 && bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0),
+      'audio/ogg': bytes.subarray(0, 4).toString('ascii') === 'OggS',
+      'audio/wav':
+        bytes.subarray(0, 4).toString('ascii') === 'RIFF' &&
+        bytes.subarray(8, 12).toString('ascii') === 'WAVE',
+      'audio/x-m4a':
+        bytes.length >= 12 && bytes.toString('ascii', 4, 8) === 'ftyp',
+    };
+    if (!signatures[file.mimetype]) {
+      throw new BadRequestException({ code: 'SOS_AUDIO_TYPE_INVALID' });
+    }
   }
 
   private mapUrl(latitude: number, longitude: number) {

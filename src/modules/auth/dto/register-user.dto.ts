@@ -9,6 +9,7 @@ import {
   MaxLength,
   MinLength,
 } from 'class-validator';
+import { USER_TYPES, UserType } from '../../users/user-type';
 
 export class RegisterUserDto {
   @ApiProperty({ example: 'user@example.com' })
@@ -59,4 +60,12 @@ export class RegisterUserDto {
   @IsString()
   @MaxLength(20)
   phone?: string;
+
+  @ApiProperty({
+    enum: USER_TYPES,
+    description:
+      'device_owner can create SOS; emergency_contact and community_responder can receive and accept SOS alerts.',
+  })
+  @IsIn(USER_TYPES)
+  userType: UserType;
 }
