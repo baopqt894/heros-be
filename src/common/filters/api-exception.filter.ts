@@ -124,6 +124,11 @@ export class ApiExceptionFilter implements ExceptionFilter {
       USER_NOT_FOUND: 'User was not found',
       AUTH_RATE_LIMITED: 'Too many authentication attempts',
       SOS_RATE_LIMITED: 'Too many SOS requests',
+      DEVICE_CREDENTIAL_INVALID: 'Physical device credentials are invalid',
+      HARDWARE_DEVICE_ALREADY_PAIRED:
+        'This physical device is already paired to another account',
+      SOS_DEVICE_OWNER_REQUIRED:
+        'Only a device-owner account can perform this action',
     };
     if (messages[code]) return messages[code];
 

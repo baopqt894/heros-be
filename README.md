@@ -13,9 +13,10 @@ npm install
 npm run start:dev
 ```
 
-- API base: `http://localhost:2155/v1`
-- Swagger: `http://localhost:2155/api-docs`
-- Health: `http://localhost:2155/v1/health`
+- Production API base: `https://heros.nextteam.site/v1`
+- Production Swagger: `https://heros.nextteam.site/api-docs`
+- Production health: `https://heros.nextteam.site/v1/health`
+- Local API base: `http://localhost:2155/v1`
 - Socket.IO namespace: `/sos`
 
 All protected endpoints require `Authorization: Bearer <accessToken>`.
@@ -54,6 +55,10 @@ PUT    /v1/me/location
 POST   /v1/me/devices
 DELETE /v1/me/devices/:deviceId
 
+GET    /v1/me/heros-devices
+POST   /v1/me/heros-devices
+DELETE /v1/me/heros-devices/:hardwareId
+
 GET    /v1/emergency-contacts
 POST   /v1/emergency-contacts
 PATCH  /v1/emergency-contacts/:id
@@ -69,6 +74,9 @@ GET    /v1/sos/:id/recordings/:recordingId
 POST   /v1/sos/:id/resolve
 POST   /v1/sos/:id/cancel
 PUT    /v1/sos/:id/sms-status
+
+POST   /v1/device/sos
+GET    /v1/device/sos/ping
 ```
 
 ## Authentication
@@ -116,6 +124,16 @@ live `sos.location` events, see recording metadata and stream protected audio.
 Audio is never exposed through the public static-file directory. Each clip is
 limited to 10 MiB and its declared duration is limited to 120 seconds. One SOS
 can contain up to 20 clips and 100 MiB total audio.
+
+## Physical-device authentication
+
+The mobile FCM registration under `/v1/me/devices` is separate from a physical
+HEROS device. A logged-in `device_owner` pairs hardware through
+`POST /v1/me/heros-devices`. The response returns a `deviceToken` exactly once;
+only its SHA-256 hash is stored. Firmware then creates SOS events through
+`POST /v1/device/sos` with `X-Heros-Hardware-Id` and
+`X-Heros-Device-Token`. Pairing the same hardware again rotates its token, and
+deleting it revokes further device requests.
 
 See [Swift integration](docs/SWIFT_INTEGRATION.md).
 

@@ -11,6 +11,7 @@ import { EmergencyContactsModule } from './modules/emergency-contacts/emergency-
 import { DevicesModule } from './modules/devices/devices.module';
 import { SosModule } from './modules/sos/sos.module';
 import { HealthController } from './modules/health/health.controller';
+import { HardwareDevicesModule } from './modules/hardware-devices/hardware-devices.module';
 
 @Module({
   imports: [
@@ -67,6 +68,7 @@ import { HealthController } from './modules/health/health.controller';
     AuthModule,
     EmergencyContactsModule,
     DevicesModule,
+    HardwareDevicesModule,
     SosModule,
   ],
   controllers: [HealthController],

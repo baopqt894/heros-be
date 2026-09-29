@@ -209,6 +209,63 @@ Content-Type: application/json
 If the MessageUI delegate returns `.sent`, mobile may send
 `{ "status": "user_reported_sent" }`. This is not proof of carrier delivery.
 
+## Pairing and testing a physical HEROS device
+
+The app pairs a physical device while logged in as a `device_owner`:
+
+```http
+POST /v1/me/heros-devices
+Authorization: Bearer <accessToken>
+Content-Type: application/json
+
+{
+  "hardwareId": "HEROS-TEST-001",
+  "label": "Thiết bị HEROS test"
+}
+```
+
+Save `data.deviceToken` into secure device storage immediately. The server only
+stores its hash and cannot return the token later. Calling the pairing endpoint
+again for the same owner and hardware ID rotates the token.
+
+Use HTTPS outside local development. Never transmit the device token over plain
+HTTP or include it in application logs.
+
+Firmware can then create an SOS without storing the user's JWT:
+
+Verify the credential without creating an SOS:
+
+```bash
+curl 'https://heros.nextteam.site/v1/device/sos/ping' \
+  -H 'X-Heros-Hardware-Id: HEROS-TEST-001' \
+  -H "X-Heros-Device-Token: $DEVICE_TOKEN"
+```
+
+Create the real SOS event:
+
+```bash
+DEVICE_TOKEN='TOKEN_RETURNED_BY_PAIRING_API'
+
+curl -X POST 'https://heros.nextteam.site/v1/device/sos' \
+  -H 'X-Heros-Hardware-Id: HEROS-TEST-001' \
+  -H "X-Heros-Device-Token: $DEVICE_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d "{
+    \"clientRequestId\": \"$(uuidgen)\",
+    \"message\": \"SOS test từ thiết bị HEROS\",
+    \"location\": {
+      \"latitude\": 10.762622,
+      \"longitude\": 106.660172,
+      \"accuracy\": 10,
+      \"recordedAt\": \"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\"
+    }
+  }"
+```
+
+Use a new `clientRequestId` for a new button press. Reuse the same ID only when
+retrying the same SOS request. Revoke lost or retired hardware with
+`DELETE /v1/me/heros-devices/:hardwareId`.
+
 ## Active tracking
 
 While an SOS is active:
