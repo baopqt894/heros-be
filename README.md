@@ -157,7 +157,10 @@ use password and mock OTP `123456`:
 - `owner@heros.vn`
 - `contact@heros.vn`
 
-See [Swift integration](docs/SWIFT_INTEGRATION.md).
+See [the complete Vietnamese iOS integration and release guide](docs/IOS_APP_INTEGRATION_AND_RELEASE_VI.md)
+for invitations before App Store publication, verified API contracts, TestFlight,
+review submission and known release blockers. The older [Swift notes](docs/SWIFT_INTEGRATION.md)
+remain supplementary.
 
 ## Verification
 

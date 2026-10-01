@@ -1,7 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
-import { Logger, ValidationPipe } from '@nestjs/common';
+import { Logger, RequestMethod, ValidationPipe } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { join } from 'path';
 import { ApiExceptionFilter } from './common/filters/api-exception.filter';
@@ -22,7 +22,15 @@ async function bootstrap() {
     origin: corsOrigins.length ? corsOrigins : true,
     credentials: true,
   });
-  app.setGlobalPrefix('v1');
+  app.setGlobalPrefix('v1', {
+    exclude: [
+      { path: 'invite', method: RequestMethod.GET },
+      {
+        path: '.well-known/apple-app-site-association',
+        method: RequestMethod.GET,
+      },
+    ],
+  });
   app.useGlobalPipes(
     new ValidationPipe({
       transform: true,
@@ -34,6 +42,9 @@ async function bootstrap() {
   app.useGlobalInterceptors(new ApiResponseInterceptor());
 
   app.useStaticAssets(join(process.cwd(), 'uploads'), { prefix: '/uploads/' });
+  app.useStaticAssets(join(process.cwd(), 'public', 'invite-assets'), {
+    prefix: '/invite-assets/',
+  });
 
   const config = new DocumentBuilder()
     .setTitle('Heros SOS API')

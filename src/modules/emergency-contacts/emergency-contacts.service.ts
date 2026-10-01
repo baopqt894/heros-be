@@ -71,7 +71,15 @@ export class EmergencyContactsService {
     const contact = await this.contactModel.findOneAndUpdate(
       { _id: id, ownerId },
       resetInvitationResponse
-        ? { $set: update, $unset: { invitationRespondedAt: 1 } }
+        ? {
+            $set: update,
+            $unset: {
+              invitationRespondedAt: 1,
+              inviteTokenHash: 1,
+              inviteExpiresAt: 1,
+              inviteEmail: 1,
+            },
+          }
         : { $set: update },
       { new: true, runValidators: true }
     );
@@ -103,7 +111,10 @@ export class EmergencyContactsService {
     this.assertObjectId(id);
     const contact = await this.contactModel.findOneAndUpdate(
       { _id: id, linkedUserId: userId, invitationStatus: 'pending' },
-      { $set: { invitationStatus, invitationRespondedAt: new Date() } },
+      {
+        $set: { invitationStatus, invitationRespondedAt: new Date() },
+        $unset: { inviteTokenHash: 1, inviteExpiresAt: 1, inviteEmail: 1 },
+      },
       { new: true }
     );
     if (!contact) {

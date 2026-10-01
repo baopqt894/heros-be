@@ -1,5 +1,8 @@
 # Swift integration contract
 
+The canonical handoff is now [HEROS iOS integration and App Store release (Vietnamese)](IOS_APP_INTEGRATION_AND_RELEASE_VI.md).
+It covers invitation links, deployment configuration, TestFlight, App Review and known backend limitations. These older notes are supplementary.
+
 ## Response envelope
 
 Decode every HTTP response with the same top-level structure:

@@ -30,6 +30,15 @@ export class EmergencyContact {
   @Prop()
   invitationRespondedAt?: Date;
 
+  @Prop({ select: false })
+  inviteTokenHash?: string;
+
+  @Prop()
+  inviteExpiresAt?: Date;
+
+  @Prop({ lowercase: true, trim: true })
+  inviteEmail?: string;
+
   @Prop({ maxlength: 120, required: true, trim: true })
   name: string;
 

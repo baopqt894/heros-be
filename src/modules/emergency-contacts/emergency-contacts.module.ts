@@ -7,6 +7,10 @@ import {
   EmergencyContactSchema,
 } from './schemas/emergency-contact.schema';
 import { UsersModule } from '../users/users.module';
+import { ContactInvitesController } from './contact-invites.controller';
+import { ContactInvitesService } from './contact-invites.service';
+import { AuthRateLimitService } from '../auth/auth-rate-limit.service';
+import { AppLinksController } from './app-links.controller';
 
 @Module({
   imports: [
@@ -15,8 +19,16 @@ import { UsersModule } from '../users/users.module';
       { name: EmergencyContact.name, schema: EmergencyContactSchema },
     ]),
   ],
-  controllers: [EmergencyContactsController],
-  providers: [EmergencyContactsService],
+  controllers: [
+    EmergencyContactsController,
+    ContactInvitesController,
+    AppLinksController,
+  ],
+  providers: [
+    EmergencyContactsService,
+    ContactInvitesService,
+    AuthRateLimitService,
+  ],
   exports: [EmergencyContactsService],
 })
 export class EmergencyContactsModule {}
