@@ -9,7 +9,7 @@ import {
   MaxLength,
   MinLength,
 } from 'class-validator';
-import { USER_TYPES, UserType } from '../../users/user-type';
+import { UserType } from '../../users/user-type';
 
 export class RegisterUserDto {
   @ApiProperty({ example: 'user@example.com' })
@@ -45,27 +45,26 @@ export class RegisterUserDto {
   @MaxLength(120)
   fullName: string;
 
-  @ApiPropertyOptional({ example: '1995-08-20' })
-  @IsOptional()
+  @ApiProperty({ example: '1995-08-20' })
   @IsDateString()
-  dateOfBirth?: string;
+  dateOfBirth: string;
 
   @ApiPropertyOptional({ enum: ['male', 'female', 'other', 'undisclosed'] })
   @IsOptional()
   @IsIn(['male', 'female', 'other', 'undisclosed'])
   gender?: string;
 
-  @ApiPropertyOptional({ example: '+84901234567' })
-  @IsOptional()
+  @ApiProperty({ example: '+84901234567' })
   @IsString()
+  @MinLength(8)
   @MaxLength(20)
-  phone?: string;
+  phone: string;
 
   @ApiProperty({
-    enum: USER_TYPES,
+    enum: ['device_owner', 'emergency_contact'],
     description:
       'device_owner can create SOS; emergency_contact and community_responder can receive and accept SOS alerts.',
   })
-  @IsIn(USER_TYPES)
+  @IsIn(['device_owner', 'emergency_contact'])
   userType: UserType;
 }

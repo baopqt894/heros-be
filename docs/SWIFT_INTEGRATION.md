@@ -54,16 +54,20 @@ Content-Type: application/json
 `userType` is required when creating an account and is one of:
 
 - `device_owner`: owns the HEROS device and can create SOS events;
-- `emergency_contact`: a relative or friend linked to a device owner;
-- `community_responder`: an opted-in community helper discoverable by location.
+- `emergency_contact`: a relative or friend linked to a device owner.
+
+`community_responder` is reserved for a future release and cannot be selected
+during registration in the current MVP.
 
 For a first-time Google login, send the same `userType` field to
 `POST /v1/auth/google`. Existing Google accounts do not need to resend it.
 
 To enable a relative to receive the SOS inside the app, create or update the
 owner's emergency contact with `linkedUserEmail` set to the email of an existing
-`emergency_contact` account. A plain phone/email contact can still receive the
-SMS composer message or email, but cannot accept the SOS in-app.
+`emergency_contact` account. The linked account must accept it through
+`POST /v1/emergency-contacts/invitations/:id/accept`. A plain phone/email contact
+can still receive the SMS composer message or email, but cannot accept the SOS
+in-app. Each owner can keep at most ten contacts.
 
 `password` is optional for backward compatibility. When it was provided during
 registration, the user can subsequently log in without requesting an OTP:
@@ -278,9 +282,9 @@ While an SOS is active:
 
 ## Accepting an SOS and protected information
 
-Before acceptance, `GET /v1/sos/:id` returns the basic alert but omits
-`currentLocation` and `recordings`. When a linked relative or nearby community
-responder chooses to help, call:
+Use `GET /v1/sos/incoming/active` to restore active map markers after app launch.
+Before acceptance, `GET /v1/sos/:id` returns the SOS identity and current
+location but omits recordings. When a linked relative chooses to help, call:
 
 ```http
 POST /v1/sos/:id/acknowledge
@@ -319,4 +323,7 @@ Authorization: Bearer <accessToken>
 ```
 
 This endpoint returns raw audio rather than the JSON envelope. It requires the
-owner or a recipient who has already acknowledged the SOS.
+owner or a recipient who has already acknowledged an active SOS. Access for the
+recipient ends immediately after resolve/cancel. Owners use `GET /v1/sos/recordings`
+for their library and `DELETE /v1/sos/:id/recordings/:recordingId` to remove a
+clip. Remaining clips expire from the server after 30 days.

@@ -10,6 +10,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { Model, Types } from 'mongoose';
 import { UsersService } from '../users/users.service';
 import { ProvisionHardwareDeviceDto } from './dto/provision-hardware-device.dto';
+import { UpdateHardwareStatusDto } from './dto/update-hardware-status.dto';
 import {
   HardwareDevice,
   HardwareDeviceDocument,
@@ -57,7 +58,11 @@ export class HardwareDevicesService {
       );
     } catch (error: any) {
       if (error?.code === 11000) {
-        throw new ConflictException({ code: 'HARDWARE_DEVICE_ALREADY_PAIRED' });
+        throw new ConflictException({
+          code: error?.keyPattern?.ownerId
+            ? 'OWNER_ALREADY_HAS_HARDWARE_DEVICE'
+            : 'HARDWARE_DEVICE_ALREADY_PAIRED',
+        });
       }
       throw error;
     }
@@ -77,6 +82,23 @@ export class HardwareDevicesService {
     return this.hardwareDeviceModel
       .find({ ownerId: new Types.ObjectId(ownerId) })
       .sort({ createdAt: -1 });
+  }
+
+  async updateStatus(deviceId: string, dto: UpdateHardwareStatusDto) {
+    const batteryReportedAt = new Date();
+    const device = await this.hardwareDeviceModel.findByIdAndUpdate(
+      deviceId,
+      { $set: { ...dto, batteryReportedAt, lastSeenAt: batteryReportedAt } },
+      { new: true, runValidators: true }
+    );
+    if (!device) throw new NotFoundException('Hardware device not found');
+    return {
+      hardwareId: device.hardwareId,
+      batteryPercent: device.batteryPercent,
+      isCharging: device.isCharging,
+      estimatedMinutesRemaining: device.estimatedMinutesRemaining,
+      batteryReportedAt: device.batteryReportedAt,
+    };
   }
 
   async revoke(ownerId: string, hardwareId: string) {

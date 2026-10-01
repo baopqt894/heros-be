@@ -6,6 +6,8 @@ import {
   HttpStatus,
   Injectable,
   NotFoundException,
+  OnModuleDestroy,
+  OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
@@ -18,6 +20,7 @@ import { EmergencyContactsService } from '../emergency-contacts/emergency-contac
 import { NotificationsService } from '../notifications/notifications.service';
 import { UsersService } from '../users/users.service';
 import {
+  AcknowledgeSosDto,
   CancelSosDto,
   CreateSosDto,
   UpdateSmsStatusDto,
@@ -30,10 +33,12 @@ import { SosGateway } from './sos.gateway';
 const ACTIVE_STATUSES = ['active', 'acknowledged'];
 const MAX_RECORDINGS_PER_SOS = 20;
 const MAX_RECORDING_BYTES_PER_SOS = 100 * 1024 * 1024;
+const RECORDING_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 @Injectable()
-export class SosService {
+export class SosService implements OnModuleInit, OnModuleDestroy {
   private readonly recordingsDirectory: string;
+  private cleanupTimer?: ReturnType<typeof setInterval>;
 
   constructor(
     @InjectModel(SosEvent.name)
@@ -47,6 +52,19 @@ export class SosService {
     this.recordingsDirectory =
       config.get<string>('SOS_RECORDINGS_DIR') ||
       join(process.cwd(), 'private_uploads', 'sos-recordings');
+  }
+
+  onModuleInit() {
+    void this.cleanupExpiredRecordings().catch(() => undefined);
+    this.cleanupTimer = setInterval(
+      () => void this.cleanupExpiredRecordings().catch(() => undefined),
+      6 * 60 * 60 * 1000
+    );
+    this.cleanupTimer.unref();
+  }
+
+  onModuleDestroy() {
+    if (this.cleanupTimer) clearInterval(this.cleanupTimer);
   }
 
   async create(ownerId: string, dto: CreateSosDto) {
@@ -84,25 +102,21 @@ export class SosService {
       throw new BadRequestException({ code: 'LOCATION_TIME_INVALID' });
     }
 
-    const [contacts, nearby] = await Promise.all([
-      this.contactsService.list(ownerId),
-      this.usersService.findNearbyResponders(
-        ownerId,
-        dto.location.longitude,
-        dto.location.latitude,
-        5000
-      ),
-    ]);
+    const contacts = await this.contactsService.list(ownerId);
     const seenUsers = new Set<string>();
     const pushUserIds = new Set<string>();
     const recipients: Array<Record<string, unknown>> = [];
     for (const contact of contacts) {
-      const linkedUserId = contact.linkedUserId?.toString();
+      const invitationAccepted =
+        !contact.invitationStatus || contact.invitationStatus === 'accepted';
+      const linkedUserId = invitationAccepted
+        ? contact.linkedUserId?.toString()
+        : undefined;
       if (linkedUserId) seenUsers.add(linkedUserId);
       if (contact.pushEnabled && linkedUserId) pushUserIds.add(linkedUserId);
       recipients.push({
         type: 'emergency_contact',
-        userId: contact.linkedUserId,
+        userId: linkedUserId ? new Types.ObjectId(linkedUserId) : undefined,
         name: contact.name,
         email: contact.email,
         phone: contact.phone,
@@ -113,19 +127,6 @@ export class SosService {
         ],
       });
     }
-    for (const responder of nearby) {
-      const responderId = responder._id.toString();
-      if (seenUsers.has(responderId)) continue;
-      seenUsers.add(responderId);
-      pushUserIds.add(responderId);
-      recipients.push({
-        type: 'nearby_responder',
-        userId: responder._id,
-        name: responder.fullName,
-        channels: ['push'],
-      });
-    }
-
     const location = {
       type: 'Point' as const,
       coordinates: [dto.location.longitude, dto.location.latitude] as [
@@ -134,11 +135,14 @@ export class SosService {
       ],
       accuracy: dto.location.accuracy,
       recordedAt,
+      address: dto.location.address?.trim(),
     };
     let event: SosEventDocument;
     try {
       event = await this.sosModel.create({
         ownerId: new Types.ObjectId(ownerId),
+        ownerName: owner.fullName || owner.email,
+        ownerAvatarUrl: owner.avatarUrl,
         code: this.createCode(),
         clientRequestId: dto.clientRequestId,
         message: dto.message.trim(),
@@ -175,6 +179,9 @@ export class SosService {
         id: event._id,
         code: event.code,
         ownerName: owner.fullName || 'Một người dùng',
+        ownerAvatarUrl: owner.avatarUrl,
+        currentLocation: location,
+        startedAt: event.startedAt,
         message: event.message,
       });
     }
@@ -186,6 +193,17 @@ export class SosService {
       .findOne({ ownerId, status: { $in: ACTIVE_STATUSES } })
       .sort({ startedAt: -1 });
     return event ? this.toMobileResponse(event) : null;
+  }
+
+  async getIncomingActive(userId: string) {
+    const events = await this.sosModel
+      .find({
+        status: { $in: ACTIVE_STATUSES },
+        'recipients.userId': new Types.ObjectId(userId),
+      })
+      .sort({ startedAt: -1 })
+      .exec();
+    return events.map((event) => this.toMobileResponse(event, userId));
   }
 
   async getOne(userId: string, id: string) {
@@ -200,6 +218,7 @@ export class SosService {
       coordinates: [dto.longitude, dto.latitude],
       accuracy: dto.accuracy,
       recordedAt: new Date(dto.recordedAt),
+      address: dto.address?.trim(),
     };
     const event = await this.sosModel.findOneAndUpdate(
       { _id: id, ownerId, status: { $in: ACTIVE_STATUSES } },
@@ -214,7 +233,7 @@ export class SosService {
     return this.toMobileResponse(event);
   }
 
-  async acknowledge(userId: string, id: string) {
+  async acknowledge(userId: string, id: string, dto: AcknowledgeSosDto = {}) {
     this.assertObjectId(id);
     const existing = await this.findAccessible(userId, id);
     const existingRecipient = existing.recipients.find(
@@ -242,6 +261,9 @@ export class SosService {
         $set: {
           status: 'acknowledged',
           'recipients.$[recipient].acknowledgedAt': new Date(),
+          ...(dto.supportMode
+            ? { 'recipients.$[recipient].supportMode': dto.supportMode }
+            : {}),
         },
       },
       {
@@ -271,6 +293,7 @@ export class SosService {
       sosId: event._id,
       userId,
       responderCount,
+      supportMode: dto.supportMode,
     };
     this.gateway.notifyUser(
       event.ownerId.toString(),
@@ -302,6 +325,7 @@ export class SosService {
       sizeBytes: file.size,
       durationSeconds: dto.durationSeconds,
       createdAt: new Date(),
+      expiresAt: new Date(Date.now() + RECORDING_RETENTION_MS),
     };
     let event: SosEventDocument | null;
     try {
@@ -374,6 +398,12 @@ export class SosService {
       (item) => item._id.toString() === recordingId
     );
     if (!recording) throw new NotFoundException('SOS recording not found');
+    const expiresAt =
+      recording.expiresAt ||
+      new Date(recording.createdAt.getTime() + RECORDING_RETENTION_MS);
+    if (expiresAt <= new Date()) {
+      throw new NotFoundException('SOS recording has expired');
+    }
     const filePath = join(this.recordingsDirectory, recording.storageKey);
     try {
       await access(filePath);
@@ -385,6 +415,46 @@ export class SosService {
       mimeType: recording.mimeType,
       sizeBytes: recording.sizeBytes,
     };
+  }
+
+  async listOwnerRecordings(ownerId: string) {
+    const events = await this.sosModel
+      .find({ ownerId, 'recordings.0': { $exists: true } })
+      .sort({ startedAt: -1 })
+      .exec();
+    return events.flatMap((event) =>
+      (event.recordings || []).map((recording) => ({
+        sosId: event._id,
+        sosCode: event.code,
+        sosStatus: event.status,
+        startedAt: event.startedAt,
+        ...this.recordingResponse(event._id.toString(), recording),
+      }))
+    );
+  }
+
+  async deleteRecording(ownerId: string, id: string, recordingId: string) {
+    this.assertObjectId(id);
+    this.assertObjectId(recordingId);
+    const event = await this.sosModel.findOne({ _id: id, ownerId });
+    if (!event) throw new NotFoundException('SOS event not found');
+    const recording = event.recordings?.find(
+      (item) => item._id.toString() === recordingId
+    );
+    if (!recording) throw new NotFoundException('SOS recording not found');
+
+    await unlink(join(this.recordingsDirectory, recording.storageKey)).catch(
+      () => undefined
+    );
+    event.recordings = event.recordings.filter(
+      (item) => item._id.toString() !== recordingId
+    );
+    event.recordingBytes = event.recordings.reduce(
+      (total, item) => total + item.sizeBytes,
+      0
+    );
+    await event.save();
+    return { deleted: true };
   }
 
   async resolve(ownerId: string, id: string) {
@@ -427,6 +497,21 @@ export class SosService {
     );
     if (!event) throw new NotFoundException('Active SOS event not found');
     this.notifyRecipients(event, `sos.${status}`, { sosId: event._id, status });
+    const owner = await this.usersService.getMe(ownerId);
+    this.notificationsService.dispatchPush(
+      event.recipients
+        .map((recipient) => recipient.userId?.toString())
+        .filter(Boolean),
+      {
+        type: status === 'resolved' ? 'SOS_RESOLVED' : 'SOS_CANCELLED',
+        sosId: event._id.toString(),
+        message:
+          status === 'resolved'
+            ? `${owner.fullName || owner.email} đã xác nhận an toàn.`
+            : `Tín hiệu SOS của ${owner.fullName || owner.email} đã được hủy.`,
+      },
+      status === 'resolved' ? 'Người dùng đã an toàn' : 'Tín hiệu SOS đã hủy'
+    );
     return this.toMobileResponse(event);
   }
 
@@ -467,6 +552,12 @@ export class SosService {
 
   private toMobileResponse(event: SosEventDocument, viewerId?: string) {
     const isOwner = !viewerId || event.ownerId.toString() === viewerId;
+    const isRecipient = Boolean(
+      viewerId &&
+      event.recipients.some(
+        (recipient) => recipient.userId?.toString() === viewerId
+      )
+    );
     const canAccessSensitive =
       isOwner || this.canAccessSensitive(event, viewerId);
     const [longitude, latitude] = event.currentLocation.coordinates;
@@ -479,6 +570,8 @@ export class SosService {
       id: event._id,
       code: event.code,
       status: event.status,
+      ownerName: event.ownerName || 'Người dùng HEROS',
+      ownerAvatarUrl: event.ownerAvatarUrl,
       message: event.message,
       startedAt: event.startedAt,
       resolvedAt: event.resolvedAt,
@@ -493,8 +586,11 @@ export class SosService {
               Boolean(recipient.acknowledgedAt)
           ),
     };
-    if (canAccessSensitive) {
+    if (isOwner || isRecipient) {
       response.currentLocation = event.currentLocation;
+      response.currentAddress = event.currentLocation.address;
+    }
+    if (canAccessSensitive) {
       response.recordings = (event.recordings || []).map((recording) =>
         this.recordingResponse(event._id.toString(), recording)
       );
@@ -513,6 +609,7 @@ export class SosService {
   private canAccessSensitive(event: SosEventDocument, userId?: string) {
     if (!userId) return true;
     if (event.ownerId.toString() === userId) return true;
+    if (!ACTIVE_STATUSES.includes(event.status)) return false;
     return event.recipients.some(
       (recipient) =>
         recipient.userId?.toString() === userId &&
@@ -538,6 +635,7 @@ export class SosService {
       sizeBytes: number;
       durationSeconds: number;
       createdAt: Date;
+      expiresAt?: Date;
     }
   ) {
     return {
@@ -546,8 +644,56 @@ export class SosService {
       sizeBytes: recording.sizeBytes,
       durationSeconds: recording.durationSeconds,
       createdAt: recording.createdAt,
+      expiresAt:
+        recording.expiresAt ||
+        new Date(recording.createdAt.getTime() + RECORDING_RETENTION_MS),
       playbackPath: `/v1/sos/${sosId}/recordings/${recording._id.toString()}`,
     };
+  }
+
+  private async cleanupExpiredRecordings() {
+    const now = new Date();
+    const legacyCutoff = new Date(now.getTime() - RECORDING_RETENTION_MS);
+    const events = await this.sosModel
+      .find({
+        $or: [
+          { 'recordings.expiresAt': { $lte: now } },
+          {
+            recordings: {
+              $elemMatch: {
+                expiresAt: { $exists: false },
+                createdAt: { $lte: legacyCutoff },
+              },
+            },
+          },
+        ],
+      })
+      .exec();
+    for (const event of events) {
+      const expired = event.recordings.filter((recording) => {
+        const expiresAt =
+          recording.expiresAt ||
+          new Date(recording.createdAt.getTime() + RECORDING_RETENTION_MS);
+        return expiresAt <= now;
+      });
+      if (!expired.length) continue;
+      await Promise.all(
+        expired.map((recording) =>
+          unlink(join(this.recordingsDirectory, recording.storageKey)).catch(
+            () => undefined
+          )
+        )
+      );
+      const expiredIds = new Set(expired.map((item) => item._id.toString()));
+      event.recordings = event.recordings.filter(
+        (item) => !expiredIds.has(item._id.toString())
+      );
+      event.recordingBytes = event.recordings.reduce(
+        (total, item) => total + item.sizeBytes,
+        0
+      );
+      await event.save();
+    }
   }
 
   private extensionFor(mimeType: string) {

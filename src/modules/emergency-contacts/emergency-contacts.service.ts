@@ -17,6 +17,8 @@ import { UsersService } from '../users/users.service';
 
 @Injectable()
 export class EmergencyContactsService {
+  private static readonly MAX_CONTACTS = 10;
+
   constructor(
     @InjectModel(EmergencyContact.name)
     private readonly contactModel: Model<EmergencyContactDocument>,
@@ -31,8 +33,18 @@ export class EmergencyContactsService {
   }
 
   async create(ownerId: string, dto: CreateEmergencyContactDto) {
+    const owner = await this.usersService.getMe(ownerId);
+    if (owner.userType !== 'device_owner') {
+      throw new BadRequestException({ code: 'DEVICE_OWNER_REQUIRED' });
+    }
     if (!dto.phone && !dto.email) {
       throw new BadRequestException('At least one contact channel is required');
+    }
+    const contactCount = await this.contactModel.countDocuments({ ownerId });
+    if (contactCount >= EmergencyContactsService.MAX_CONTACTS) {
+      throw new BadRequestException({
+        code: 'EMERGENCY_CONTACT_LIMIT_REACHED',
+      });
     }
     const linkedUserId = await this.resolveLinkedUser(dto.linkedUserEmail);
     const { linkedUserEmail: _linkedUserEmail, ...contact } = dto;
@@ -41,6 +53,7 @@ export class EmergencyContactsService {
       ownerId: new Types.ObjectId(ownerId),
       email: dto.email?.trim().toLowerCase(),
       linkedUserId,
+      invitationStatus: linkedUserId ? 'pending' : 'unlinked',
     });
   }
 
@@ -48,13 +61,18 @@ export class EmergencyContactsService {
     this.assertObjectId(id);
     const { linkedUserEmail, ...contactFields } = dto;
     const update: Record<string, unknown> = { ...contactFields };
+    let resetInvitationResponse = false;
     if (dto.email) update.email = dto.email.trim().toLowerCase();
     if (linkedUserEmail) {
       update.linkedUserId = await this.resolveLinkedUser(linkedUserEmail);
+      update.invitationStatus = 'pending';
+      resetInvitationResponse = true;
     }
     const contact = await this.contactModel.findOneAndUpdate(
       { _id: id, ownerId },
-      { $set: update },
+      resetInvitationResponse
+        ? { $set: update, $unset: { invitationRespondedAt: 1 } }
+        : { $set: update },
       { new: true, runValidators: true }
     );
     if (!contact) throw new NotFoundException('Emergency contact not found');
@@ -67,6 +85,49 @@ export class EmergencyContactsService {
     if (!result.deletedCount)
       throw new NotFoundException('Emergency contact not found');
     return { deleted: true };
+  }
+
+  listInvitations(userId: string) {
+    return this.contactModel
+      .find({ linkedUserId: userId, invitationStatus: 'pending' })
+      .populate('ownerId', 'fullName avatarUrl email')
+      .sort({ createdAt: -1 })
+      .exec();
+  }
+
+  async respondToInvitation(
+    userId: string,
+    id: string,
+    invitationStatus: 'accepted' | 'declined'
+  ) {
+    this.assertObjectId(id);
+    const contact = await this.contactModel.findOneAndUpdate(
+      { _id: id, linkedUserId: userId, invitationStatus: 'pending' },
+      { $set: { invitationStatus, invitationRespondedAt: new Date() } },
+      { new: true }
+    );
+    if (!contact) {
+      throw new NotFoundException('Emergency contact invitation not found');
+    }
+    return contact;
+  }
+
+  async unlink(userId: string, id: string) {
+    this.assertObjectId(id);
+    const contact = await this.contactModel.findOneAndUpdate(
+      { _id: id, linkedUserId: userId },
+      {
+        $set: {
+          invitationStatus: 'declined',
+          invitationRespondedAt: new Date(),
+        },
+        $unset: { linkedUserId: 1 },
+      },
+      { new: true }
+    );
+    if (!contact)
+      throw new NotFoundException('Emergency contact link not found');
+    return { unlinked: true };
   }
 
   private assertObjectId(id: string) {

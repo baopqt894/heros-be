@@ -79,4 +79,30 @@ describe('HardwareDevicesService', () => {
       response: { code: 'DEVICE_CREDENTIAL_INVALID' },
     });
   });
+
+  it('stores battery telemetry reported by an authenticated device', async () => {
+    const reportedAt = new Date();
+    const model = {
+      findByIdAndUpdate: jest.fn().mockResolvedValue({
+        hardwareId: 'HEROS-TEST-001',
+        batteryPercent: 82,
+        isCharging: false,
+        estimatedMinutesRemaining: 2880,
+        batteryReportedAt: reportedAt,
+      }),
+    };
+    const service = new HardwareDevicesService(model as any, {} as any);
+
+    await expect(
+      service.updateStatus(deviceId.toString(), {
+        batteryPercent: 82,
+        isCharging: false,
+        estimatedMinutesRemaining: 2880,
+      })
+    ).resolves.toMatchObject({
+      batteryPercent: 82,
+      isCharging: false,
+      estimatedMinutesRemaining: 2880,
+    });
+  });
 });

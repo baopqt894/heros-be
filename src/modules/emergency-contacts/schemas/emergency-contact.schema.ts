@@ -20,6 +20,16 @@ export class EmergencyContact {
   @Prop({ ref: 'User', type: MongooseSchema.Types.ObjectId })
   linkedUserId?: Types.ObjectId;
 
+  @Prop({
+    default: 'unlinked',
+    enum: ['unlinked', 'pending', 'accepted', 'declined'],
+    index: true,
+  })
+  invitationStatus: 'unlinked' | 'pending' | 'accepted' | 'declined';
+
+  @Prop()
+  invitationRespondedAt?: Date;
+
   @Prop({ maxlength: 120, required: true, trim: true })
   name: string;
 
@@ -45,3 +55,4 @@ export class EmergencyContact {
 export const EmergencyContactSchema =
   SchemaFactory.createForClass(EmergencyContact);
 EmergencyContactSchema.index({ ownerId: 1, priority: 1, createdAt: 1 });
+EmergencyContactSchema.index({ linkedUserId: 1, invitationStatus: 1 });

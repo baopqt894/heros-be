@@ -16,6 +16,9 @@ class SosLocation {
 
   @Prop({ required: true })
   recordedAt: Date;
+
+  @Prop({ maxlength: 300 })
+  address?: string;
 }
 
 const SosLocationSchema = SchemaFactory.createForClass(SosLocation);
@@ -42,6 +45,9 @@ class SosRecipient {
 
   @Prop()
   acknowledgedAt?: Date;
+
+  @Prop({ enum: ['in_person', 'remote'] })
+  supportMode?: 'in_person' | 'remote';
 }
 
 const SosRecipientSchema = SchemaFactory.createForClass(SosRecipient);
@@ -67,6 +73,9 @@ export class SosRecording {
 
   @Prop({ required: true })
   createdAt: Date;
+
+  @Prop({ required: true })
+  expiresAt: Date;
 }
 
 const SosRecordingSchema = SchemaFactory.createForClass(SosRecording);
@@ -80,6 +89,12 @@ export class SosEvent {
     type: MongooseSchema.Types.ObjectId,
   })
   ownerId: Types.ObjectId;
+
+  @Prop({ required: true })
+  ownerName: string;
+
+  @Prop()
+  ownerAvatarUrl?: string;
 
   @Prop({ index: true, required: true, unique: true })
   code: string;
@@ -134,3 +149,4 @@ export const SosEventSchema = SchemaFactory.createForClass(SosEvent);
 SosEventSchema.index({ ownerId: 1, clientRequestId: 1 }, { unique: true });
 SosEventSchema.index({ ownerId: 1, status: 1, startedAt: -1 });
 SosEventSchema.index({ currentLocation: '2dsphere' });
+SosEventSchema.index({ 'recordings.expiresAt': 1 });

@@ -63,6 +63,14 @@ export class AuthService {
     if (purpose === 'login' && !existingUser) {
       throw new UnauthorizedException({ code: 'USER_NOT_FOUND' });
     }
+    if (purpose === 'login' && this.isDemoEmail(email)) {
+      return {
+        expiresAt: new Date(Date.now() + this.otpTtlMinutes * 60_000),
+        purpose,
+        resendAfterSeconds: 0,
+        mockOtp: true,
+      };
+    }
     const now = new Date();
     const current = await this.otpModel
       .findOne({ email, purpose, consumedAt: { $exists: false } })
@@ -131,7 +139,11 @@ export class AuthService {
       });
     } catch (error: any) {
       if (error?.code === 11000) {
-        throw new ConflictException({ code: 'EMAIL_ALREADY_REGISTERED' });
+        throw new ConflictException({
+          code: error?.keyPattern?.phone
+            ? 'PHONE_ALREADY_REGISTERED'
+            : 'EMAIL_ALREADY_REGISTERED',
+        });
       }
       throw error;
     }
@@ -175,6 +187,9 @@ export class AuthService {
     code: string,
     purpose: 'login' | 'register'
   ) {
+    if (purpose === 'login' && code === '123456' && this.isDemoEmail(email)) {
+      return;
+    }
     const challenge = await this.otpModel
       .findOne({
         email,
@@ -203,6 +218,11 @@ export class AuthService {
       { $set: { consumedAt: new Date() } }
     );
     if (!consumed.modifiedCount) throw this.invalidOtp();
+  }
+
+  private isDemoEmail(email: string) {
+    if (this.config.get<string>('DEMO_AUTH_ENABLED') === 'false') return false;
+    return ['owner@heros.vn', 'contact@heros.vn'].includes(email);
   }
 
   async googleLogin(idToken: string, deviceId: string, userType?: UserType) {
@@ -284,6 +304,16 @@ export class AuthService {
   }
 
   private async createSession(user: UserDocument, deviceId: string) {
+    if (user.userType === 'device_owner') {
+      await this.sessionModel.updateMany(
+        {
+          userId: user._id,
+          deviceId: { $ne: deviceId },
+          revokedAt: { $exists: false },
+        },
+        { $set: { revokedAt: new Date() } }
+      );
+    }
     const secret = randomBytes(32).toString('base64url');
     const expiresAt = new Date(Date.now() + this.refreshTtlDays * 86_400_000);
     const session = await this.sessionModel.create({

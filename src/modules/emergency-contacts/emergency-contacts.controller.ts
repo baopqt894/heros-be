@@ -27,6 +27,55 @@ export class EmergencyContactsController {
     return { success: true, data: await this.contactsService.list(user.sub) };
   }
 
+  @Get('invitations')
+  async invitations(@CurrentUser() user: AuthenticatedUser) {
+    return {
+      success: true,
+      data: await this.contactsService.listInvitations(user.sub),
+    };
+  }
+
+  @Post('invitations/:id/accept')
+  async acceptInvitation(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string
+  ) {
+    return {
+      success: true,
+      data: await this.contactsService.respondToInvitation(
+        user.sub,
+        id,
+        'accepted'
+      ),
+    };
+  }
+
+  @Post('invitations/:id/decline')
+  async declineInvitation(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string
+  ) {
+    return {
+      success: true,
+      data: await this.contactsService.respondToInvitation(
+        user.sub,
+        id,
+        'declined'
+      ),
+    };
+  }
+
+  @Delete('invitations/:id/link')
+  async unlink(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string
+  ) {
+    return {
+      success: true,
+      data: await this.contactsService.unlink(user.sub, id),
+    };
+  }
+
   @Post()
   async create(
     @CurrentUser() user: AuthenticatedUser,

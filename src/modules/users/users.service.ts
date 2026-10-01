@@ -63,7 +63,7 @@ export class UsersService implements OnModuleInit {
         ? new Date(profile.dateOfBirth)
         : undefined,
       gender: profile.gender,
-      phone: profile.phone,
+      phone: profile.phone?.trim(),
       passwordHash: profile.passwordHash,
       userType: profile.userType,
     });

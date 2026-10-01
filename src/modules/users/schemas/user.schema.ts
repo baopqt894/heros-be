@@ -47,7 +47,7 @@ export class User {
   @Prop({ enum: ['male', 'female', 'other', 'undisclosed'] })
   gender?: string;
 
-  @Prop({ trim: true })
+  @Prop({ index: true, sparse: true, trim: true, unique: true })
   phone?: string;
 
   @Prop({

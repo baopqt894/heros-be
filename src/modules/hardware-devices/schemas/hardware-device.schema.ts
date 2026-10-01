@@ -6,7 +6,6 @@ export type HardwareDeviceDocument = HydratedDocument<HardwareDevice>;
 @Schema({ collection: 'hardware_devices', timestamps: true, versionKey: false })
 export class HardwareDevice {
   @Prop({
-    index: true,
     ref: 'User',
     required: true,
     type: MongooseSchema.Types.ObjectId,
@@ -28,10 +27,22 @@ export class HardwareDevice {
   @Prop()
   lastSeenAt?: Date;
 
+  @Prop({ max: 100, min: 0 })
+  batteryPercent?: number;
+
+  @Prop()
+  isCharging?: boolean;
+
+  @Prop({ min: 0 })
+  estimatedMinutesRemaining?: number;
+
+  @Prop()
+  batteryReportedAt?: Date;
+
   createdAt: Date;
   updatedAt: Date;
 }
 
 export const HardwareDeviceSchema =
   SchemaFactory.createForClass(HardwareDevice);
-HardwareDeviceSchema.index({ ownerId: 1, createdAt: -1 });
+HardwareDeviceSchema.index({ ownerId: 1 }, { unique: true });

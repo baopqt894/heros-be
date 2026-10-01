@@ -23,6 +23,6 @@ import {
   ],
   controllers: [AuthController, RegistrationController],
   providers: [AuthService, AuthRateLimitService, EmailService, PasswordService],
-  exports: [AuthService, EmailService],
+  exports: [AuthService, EmailService, PasswordService],
 })
 export class AuthModule {}

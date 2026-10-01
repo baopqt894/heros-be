@@ -47,7 +47,7 @@ describe('SosService response privacy', () => {
     );
   }
 
-  it('does not expose emergency-contact PII to a responder', async () => {
+  it('shows the live location but not recordings or contact PII before acceptance', async () => {
     const result = await createService().getOne(
       recipientId.toString(),
       eventId.toString()
@@ -55,7 +55,7 @@ describe('SosService response privacy', () => {
 
     expect(result).not.toHaveProperty('recipients');
     expect(result).not.toHaveProperty('smsPayload');
-    expect(result).not.toHaveProperty('currentLocation');
+    expect(result).toHaveProperty('currentLocation');
     expect(result).not.toHaveProperty('recordings');
   });
 
@@ -107,6 +107,26 @@ describe('SosService response privacy', () => {
   it('blocks recording playback before the recipient accepts', async () => {
     await expect(
       createService().openRecording(
+        recipientId.toString(),
+        eventId.toString(),
+        new Types.ObjectId().toString()
+      )
+    ).rejects.toMatchObject({
+      response: { code: 'SOS_ACKNOWLEDGEMENT_REQUIRED' },
+    });
+  });
+
+  it('revokes recipient recording access after the owner resolves the SOS', async () => {
+    const resolvedEvent = {
+      ...event,
+      status: 'resolved',
+      recipients: [{ ...event.recipients[0], acknowledgedAt: new Date() }],
+      recordings: [],
+    };
+    await expect(
+      createService({
+        findById: jest.fn().mockResolvedValue(resolvedEvent),
+      }).openRecording(
         recipientId.toString(),
         eventId.toString(),
         new Types.ObjectId().toString()

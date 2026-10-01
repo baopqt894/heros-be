@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Post,
@@ -23,6 +24,7 @@ import type { Response } from 'express';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import {
+  AcknowledgeSosDto,
   CancelSosDto,
   CreateSosDto,
   UpdateSmsStatusDto,
@@ -50,6 +52,22 @@ export class SosController {
     return { success: true, data: await this.sosService.getActive(user.sub) };
   }
 
+  @Get('recordings')
+  async recordings(@CurrentUser() user: AuthenticatedUser) {
+    return {
+      success: true,
+      data: await this.sosService.listOwnerRecordings(user.sub),
+    };
+  }
+
+  @Get('incoming/active')
+  async incomingActive(@CurrentUser() user: AuthenticatedUser) {
+    return {
+      success: true,
+      data: await this.sosService.getIncomingActive(user.sub),
+    };
+  }
+
   @Get(':id')
   async getOne(
     @CurrentUser() user: AuthenticatedUser,
@@ -73,11 +91,12 @@ export class SosController {
   @Post(':id/acknowledge')
   async acknowledge(
     @CurrentUser() user: AuthenticatedUser,
-    @Param('id') id: string
+    @Param('id') id: string,
+    @Body() dto: AcknowledgeSosDto
   ) {
     return {
       success: true,
-      data: await this.sosService.acknowledge(user.sub, id),
+      data: await this.sosService.acknowledge(user.sub, id, dto),
     };
   }
 
@@ -139,8 +158,23 @@ export class SosController {
       'Content-Length': String(recording.sizeBytes),
       'Cache-Control': 'private, no-store',
       'X-Content-Type-Options': 'nosniff',
+      'Content-Disposition': 'inline',
+      'Cross-Origin-Resource-Policy': 'same-origin',
+      'Accept-Ranges': 'none',
     });
     return new StreamableFile(recording.stream);
+  }
+
+  @Delete(':id/recordings/:recordingId')
+  async deleteRecording(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('recordingId') recordingId: string
+  ) {
+    return {
+      success: true,
+      data: await this.sosService.deleteRecording(user.sub, id, recordingId),
+    };
   }
 
   @Post(':id/resolve')

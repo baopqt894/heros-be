@@ -64,7 +64,9 @@ export class NotificationsService {
           type: 'SOS_CREATED',
           sosId: input.eventId,
           code: input.code,
-          message: `${input.ownerName}: ${input.message}`,
+          message: `${input.ownerName} đang gặp sự cố, cần bạn hỗ trợ!`,
+          detail: input.message,
+          mapUrl: input.mapUrl,
         },
         'Tín hiệu SOS'
       ),
