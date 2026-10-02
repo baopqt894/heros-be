@@ -10,6 +10,7 @@ import {
 } from './schemas/account-challenge.schema';
 import { AccountController } from './account.controller';
 import { AccountService } from './account.service';
+import { AvatarUploadService } from './avatar-upload.service';
 
 @Module({
   imports: [
@@ -22,6 +23,6 @@ import { AccountService } from './account.service';
     ]),
   ],
   controllers: [AccountController],
-  providers: [AccountService],
+  providers: [AccountService, AvatarUploadService],
 })
 export class AccountModule {}

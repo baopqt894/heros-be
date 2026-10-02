@@ -23,6 +23,7 @@ import { EmailService } from '../auth/email.service';
 import { SosService } from '../sos/sos.service';
 import { EmergencyContactsService } from '../emergency-contacts/emergency-contacts.service';
 import { ConfirmAccountActionDto } from './account.dto';
+import { AvatarUploadService } from './avatar-upload.service';
 
 @Injectable()
 export class AccountService implements OnModuleInit, OnModuleDestroy {
@@ -37,7 +38,8 @@ export class AccountService implements OnModuleInit, OnModuleDestroy {
     private readonly email: EmailService,
     private readonly config: ConfigService,
     private readonly sos: SosService,
-    private readonly contacts: EmergencyContactsService
+    private readonly contacts: EmergencyContactsService,
+    private readonly avatarUpload: AvatarUploadService
   ) {}
 
   onModuleInit() {
@@ -252,10 +254,12 @@ export class AccountService implements OnModuleInit, OnModuleDestroy {
         b.toString('ascii', 0, 4) === 'RIFF' &&
         b.toString('ascii', 8, 12) === 'WEBP');
     if (!valid) throw new BadRequestException({ code: 'AVATAR_TYPE_INVALID' });
-    const avatarUrl = `/v1/profiles/${userId}/avatar`;
+    if (!(await this.users.exists({ _id: userId, status: 'active' })))
+      throw new NotFoundException('User not found');
+    const avatarUrl = await this.avatarUpload.upload(file);
     const result = await this.users.updateOne(
       { _id: userId, status: 'active' },
-      { $set: { avatarData: b, avatarMimeType: file.mimetype, avatarUrl } }
+      { $set: { avatarUrl }, $unset: { avatarData: 1, avatarMimeType: 1 } }
     );
     if (!result.matchedCount) throw new NotFoundException('User not found');
     return { avatarUrl };
@@ -272,6 +276,8 @@ export class AccountService implements OnModuleInit, OnModuleDestroy {
     const user = await this.users
       .findOne({ _id: ownerId, status: 'active' })
       .select('+avatarData');
+    if (user?.avatarUrl?.startsWith('https://storages.limgrow.com/uploads/'))
+      return { url: user.avatarUrl };
     if (!user?.avatarData) throw new NotFoundException('Avatar not found');
     return {
       buffer: Buffer.from(user.avatarData),

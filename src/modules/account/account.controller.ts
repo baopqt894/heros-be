@@ -7,7 +7,6 @@ import {
   Param,
   Post,
   Res,
-  StreamableFile,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
@@ -90,14 +89,16 @@ export class AccountController {
   async avatar(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
-    @Res({ passthrough: true }) response: Response
+    @Res() response: Response
   ) {
     const file = await this.accounts.avatar(user.sub, id);
+    response.set('Cache-Control', 'private, no-store');
+    if (file.url) return response.redirect(302, file.url);
     response.set({
       'Content-Type': file.mimeType,
       'Cache-Control': 'private, no-store',
       'X-Content-Type-Options': 'nosniff',
     });
-    return new StreamableFile(file.buffer);
+    return response.send(file.buffer);
   }
 }

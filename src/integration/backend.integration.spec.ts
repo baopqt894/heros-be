@@ -11,6 +11,7 @@ import { EmailService } from '../modules/auth/email.service';
 import { NotificationsService } from '../modules/notifications/notifications.service';
 import { FirebaseService } from '../modules/notifications/firebase.service';
 import { AccountService } from '../modules/account/account.service';
+import { AvatarUploadService } from '../modules/account/avatar-upload.service';
 import { DevicesService } from '../modules/devices/devices.service';
 import { SosService } from '../modules/sos/sos.service';
 import { ApiExceptionFilter } from '../common/filters/api-exception.filter';
@@ -45,6 +46,7 @@ describe('Backend contracts against isolated MongoDB', () => {
   ) {
     const response = await fetch(`${base}${path}`, {
       method,
+      redirect: 'manual',
       headers: {
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...(body && !(body instanceof FormData)
@@ -99,6 +101,14 @@ describe('Backend contracts against isolated MongoDB', () => {
       .useValue({ sendOtp, sendSos: jest.fn() })
       .overrideProvider(FirebaseService)
       .useValue({ send: jest.fn() })
+      .overrideProvider(AvatarUploadService)
+      .useValue({
+        upload: jest
+          .fn()
+          .mockResolvedValue(
+            'https://storages.limgrow.com/uploads/test/avatar.png'
+          ),
+      })
       .overrideProvider(NotificationsService)
       .useValue({ dispatchSos: jest.fn(), dispatchPush: jest.fn() })
       .compile();
@@ -192,7 +202,7 @@ describe('Backend contracts against isolated MongoDB', () => {
     ).toBe(400);
   });
 
-  it('stores avatars privately and rejects unrelated readers', async () => {
+  it('stores only the uploaded URL and protects the legacy profile route', async () => {
     const form = new FormData();
     form.append(
       'avatar',
@@ -203,9 +213,15 @@ describe('Backend contracts against isolated MongoDB', () => {
     );
     const uploaded = await request('/me/avatar', 'POST', form);
     expect(uploaded.body.data.avatarUrl).toBe(
-      `/v1/profiles/${owner.id}/avatar`
+      'https://storages.limgrow.com/uploads/test/avatar.png'
     );
-    expect((await request(`/profiles/${owner.id}/avatar`)).status).toBe(200);
+    const user = await app
+      .get(getModelToken('User'))
+      .findById(owner.id)
+      .select('+avatarData');
+    expect(user.avatarUrl).toBe(uploaded.body.data.avatarUrl);
+    expect(user.avatarData).toBeUndefined();
+    expect((await request(`/profiles/${owner.id}/avatar`)).status).toBe(302);
     expect(
       (
         await request(
@@ -256,15 +272,13 @@ describe('Backend contracts against isolated MongoDB', () => {
   });
 
   it('uploads device clips idempotently and ignores out-of-order GPS', async () => {
-    const link = await app
-      .get(getModelToken('EmergencyContact'))
-      .create({
-        ownerId: owner._id,
-        linkedUserId: contact._id,
-        invitationStatus: 'accepted',
-        name: 'Contact',
-        phone: '+84901111111',
-      });
+    const link = await app.get(getModelToken('EmergencyContact')).create({
+      ownerId: owner._id,
+      linkedUserId: contact._id,
+      invitationStatus: 'accepted',
+      name: 'Contact',
+      phone: '+84901111111',
+    });
     contactId = link.id;
     const provision = await request('/me/heros-devices', 'POST', {
       hardwareId: 'HEROS-INTEGRATION-001',

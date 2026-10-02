@@ -8,7 +8,7 @@ real-time Socket.IO events.
 Latest mobile/device API additions, migration requirements and remaining release
 limitations: [Backend API completion guide (Vietnamese)](docs/BACKEND_API_COMPLETION_VI.md).
 Includes Apple login/link, account deletion, email-authorized phone updates,
-private avatars and hardware GPS/audio clip uploads.
+Limgrow-hosted avatar URLs and hardware GPS/audio clip uploads.
 
 ## Setup
 

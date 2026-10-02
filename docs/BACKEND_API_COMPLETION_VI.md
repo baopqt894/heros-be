@@ -14,7 +14,7 @@ Lỗi: `data.errorCode` và `data.message`. File avatar/audio trả binary, khô
 | Điện thoại | Theo yêu cầu tạm thời: OTP ngẫu nhiên gửi email, cho phép cập nhật SĐT | KHÔNG phải SMS OTP, không chứng minh sở hữu SĐT |
 | Một điện thoại | Một login session đang hoạt động/account; kiểm tra DB mỗi HTTP request và mỗi lần socket emit; push gắn với session | Không chống được sao chép cùng token sang thiết bị khác; cần App Attest/device-bound keys nếu yêu cầu chặt hơn |
 | Hủy người thân | Mỗi lần đọc/emit kiểm tra lại liên kết accepted hiện tại; snapshot mới lưu contactId | Không thể thu hồi dữ liệu đã tải/nghe hoặc response đang truyền trước thời điểm hủy |
-| Avatar | Upload/xóa/đọc có auth; PNG/JPEG/WebP, tối đa 2 MiB; lưu trong MongoDB | Kiểm tra MIME/signature, không phải dịch vụ biên tập ảnh |
+| Avatar | Upload có auth; PNG/JPEG/WebP, tối đa 2 MiB; gửi sang Limgrow, MongoDB chỉ lưu URL | URL storage truy cập trực tiếp; xóa chỉ gỡ link, chưa xóa file remote |
 | Audio phần cứng | Upload từng clip, chống trùng bằng clientRecordingId, thông báo realtime khi clip hoàn tất | Không phải WebRTC/livestream âm thanh liên tục |
 | GPS phần cứng | PUT vị trí định kỳ, bỏ qua fix cũ, chặn thời gian tương lai >60s | Firmware phải thực sự gửi vị trí; backend không tự đọc GPS |
 | Contract phần cứng | HTTP/QR contract v1 có endpoint đọc | BLE UUID, thời lượng nhấn nút, màu LED chưa có thông số xác nhận từ firmware |
@@ -85,10 +85,11 @@ Refresh không được dùng để chuyển sang deviceId khác. DeviceId do ap
 
 ## 6. Avatar
 
-- `POST /me/avatar`: multipart field `avatar`, tối đa 2 MiB, PNG/JPEG/WebP. Response `{avatarUrl: "/v1/profiles/USER_ID/avatar"}`.
-- `GET /profiles/:id/avatar`: bearer bắt buộc; chỉ bản thân hoặc người có liên kết accepted với nhau. Mobile ghép origin với đường dẫn, gửi Authorization khi load ảnh.
-- `DELETE /me/avatar`: xóa avatar.
-- Avatar nằm trong MongoDB (không public static), đi theo backup/delete account. Không cache public. Snapshot avatar SOS cũ có thể không có URL mới; lấy profile mới khi cần.
+- `POST /me/avatar`: multipart field `avatar`, tối đa 2 MiB, PNG/JPEG/WebP. Backend gửi multipart `file` + `type=image` tới `https://upload-services.limgrow.com/upload`, lưu `url` trả về vào `user.avatarUrl`. Response `{avatarUrl: "https://storages.limgrow.com/uploads/..."}`.
+- `.env` backend: `LIMGROW_UPLOAD_API_KEY=...`. Không đưa key vào mobile/git. Thiếu key trả 503 `AVATAR_UPLOAD_NOT_CONFIGURED`; upstream lỗi/timeout/URL không hợp lệ trả 502 `AVATAR_UPLOAD_FAILED`, giữ avatar cũ.
+- Mobile hiển thị `avatarUrl` trực tiếp. URL mới không được bảo vệ bởi auth HEROS; ai có URL có thể truy cập theo chính sách storage.
+- `GET /profiles/:id/avatar`: route tương thích vẫn yêu cầu bearer và quan hệ accepted; redirect 302 tới URL Limgrow với ảnh mới, đọc binary MongoDB với ảnh legacy. Không tự migrate ảnh legacy; khi upload mới sẽ bỏ binary cũ.
+- `DELETE /me/avatar`: gỡ URL/binary legacy khỏi hồ sơ. Xóa/thay avatar hoặc xóa account KHÔNG xóa file remote vì chưa có contract delete Limgrow. Không tuyên bố file remote đã bị xóa; cần thêm API delete/lifecycle phía storage nếu muốn purge thật.
 
 ## 7. Contract thiết bị v1
 
