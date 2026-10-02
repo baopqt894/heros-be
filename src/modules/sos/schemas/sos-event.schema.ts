@@ -25,6 +25,9 @@ const SosLocationSchema = SchemaFactory.createForClass(SosLocation);
 
 @Schema({ _id: false })
 class SosRecipient {
+  @Prop({ type: MongooseSchema.Types.ObjectId })
+  contactId?: Types.ObjectId;
+
   @Prop({ enum: ['emergency_contact', 'nearby_responder'], required: true })
   type: string;
 
@@ -55,6 +58,9 @@ const SosRecipientSchema = SchemaFactory.createForClass(SosRecipient);
 @Schema({ _id: true, timestamps: false, versionKey: false })
 export class SosRecording {
   _id: Types.ObjectId;
+
+  @Prop()
+  clientRecordingId?: string;
 
   @Prop({ ref: 'User', required: true, type: MongooseSchema.Types.ObjectId })
   uploaderId: Types.ObjectId;

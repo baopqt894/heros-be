@@ -116,7 +116,7 @@ export class HardwareDevicesService {
   }
 
   async authenticate(hardwareId: string, deviceToken: string) {
-    if (!hardwareId || !deviceToken) throw this.invalidCredential();
+    if (typeof hardwareId !== 'string' || typeof deviceToken !== 'string' || !hardwareId || !deviceToken) throw this.invalidCredential();
     const device = await this.hardwareDeviceModel
       .findOne({
         hardwareId: this.normalizeHardwareId(hardwareId),
@@ -129,6 +129,8 @@ export class HardwareDevicesService {
     ) {
       throw this.invalidCredential();
     }
+    const owner = await this.usersService.findById(device.ownerId.toString());
+    if (!owner || owner.status !== 'active') throw this.invalidCredential();
     void this.hardwareDeviceModel
       .updateOne({ _id: device._id }, { $set: { lastSeenAt: new Date() } })
       .catch(() => undefined);

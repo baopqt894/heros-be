@@ -12,6 +12,7 @@ import { DevicesModule } from './modules/devices/devices.module';
 import { SosModule } from './modules/sos/sos.module';
 import { HealthController } from './modules/health/health.controller';
 import { HardwareDevicesModule } from './modules/hardware-devices/hardware-devices.module';
+import { AccountModule } from './modules/account/account.module';
 
 @Module({
   imports: [
@@ -70,6 +71,7 @@ import { HardwareDevicesModule } from './modules/hardware-devices/hardware-devic
     DevicesModule,
     HardwareDevicesModule,
     SosModule,
+    AccountModule,
   ],
   controllers: [HealthController],
   providers: [

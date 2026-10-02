@@ -3,6 +3,7 @@ import {
   Injectable,
   NotFoundException,
   OnModuleInit,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -42,6 +43,40 @@ export class UsersService implements OnModuleInit {
 
   findByGoogleSubject(subject: string) {
     return this.userModel.findOne({ googleSubject: subject }).exec();
+  }
+
+  findByAppleSubject(appleSubject: string) {
+    return this.userModel.findOne({ appleSubject }).exec();
+  }
+
+  async activateSession(id: string, sessionKey: string) {
+    const result = await this.userModel.updateOne(
+      { _id: id, status: 'active' },
+      { $set: { activeSessionKey: sessionKey } }
+    );
+    if (!result.matchedCount)
+      throw new UnauthorizedException('Account is unavailable');
+  }
+
+  async assertSession(id: string, sessionKey?: string) {
+    if (
+      !Types.ObjectId.isValid(id) ||
+      !sessionKey ||
+      !(await this.userModel.exists({
+        _id: id,
+        status: 'active',
+        activeSessionKey: sessionKey,
+      }))
+    ) {
+      throw new UnauthorizedException({ code: 'SESSION_REVOKED' });
+    }
+  }
+
+  async revokeSession(id: string, sessionKey: string) {
+    await this.userModel.updateOne(
+      { _id: id, activeSessionKey: sessionKey },
+      { $unset: { activeSessionKey: 1 } }
+    );
   }
 
   createEmailUser(
@@ -86,6 +121,12 @@ export class UsersService implements OnModuleInit {
       }
     }
     const update: Record<string, unknown> = { ...dto };
+    if (dto.phone !== undefined) {
+      throw new BadRequestException({
+        code: 'PHONE_VERIFICATION_REQUIRED',
+        message: 'Use the phone verification endpoints to change your phone.',
+      });
+    }
     if (dto.dateOfBirth) update.dateOfBirth = new Date(dto.dateOfBirth);
     const user = await this.userModel
       .findOneAndUpdate(

@@ -86,6 +86,11 @@ export class CancelSosDto {
 }
 
 export class UploadSosRecordingDto {
+  @ApiPropertyOptional({ description: 'Stable UUID for retry-safe clip uploads.' })
+  @IsOptional()
+  @IsUUID()
+  clientRecordingId?: string;
+
   @ApiProperty({
     example: 8.4,
     description: 'Audio duration reported by the recording client.',

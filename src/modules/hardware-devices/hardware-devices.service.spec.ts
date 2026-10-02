@@ -48,7 +48,7 @@ describe('HardwareDevicesService', () => {
       findOne: jest.fn().mockReturnValue({ select }),
       updateOne: jest.fn().mockResolvedValue({ acknowledged: true }),
     };
-    const service = new HardwareDevicesService(model as any, {} as any);
+    const service = new HardwareDevicesService(model as any, { findById: jest.fn().mockResolvedValue({ status: 'active' }) } as any);
 
     await expect(
       service.authenticate('HEROS-TEST-001', token)

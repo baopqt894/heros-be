@@ -1,4 +1,11 @@
-import { Body, Controller, Delete, Param, Post } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Param,
+  Post,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
@@ -16,9 +23,11 @@ export class DevicesController {
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: RegisterDeviceDto
   ) {
+    if (dto.deviceId !== user.deviceId)
+      throw new BadRequestException({ code: 'SESSION_DEVICE_MISMATCH' });
     return {
       success: true,
-      data: await this.devicesService.register(user.sub, dto),
+      data: await this.devicesService.register(user.sub, dto, user.sessionKey),
     };
   }
 

@@ -16,6 +16,9 @@ export class Device {
   @Prop({ required: true, trim: true })
   deviceId: string;
 
+  @Prop({ select: false })
+  sessionKey?: string;
+
   @Prop({ enum: ['ios', 'android'], required: true })
   platform: 'ios' | 'android';
 

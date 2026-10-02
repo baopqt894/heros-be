@@ -4,6 +4,7 @@ import { UsersModule } from '../users/users.module';
 import { HardwareDevicesController } from './hardware-devices.controller';
 import { DeviceStatusController } from './device-status.controller';
 import { HardwareDevicesService } from './hardware-devices.service';
+import { FirmwareContractController } from './firmware-contract.controller';
 import {
   HardwareDevice,
   HardwareDeviceSchema,
@@ -16,7 +17,7 @@ import {
       { name: HardwareDevice.name, schema: HardwareDeviceSchema },
     ]),
   ],
-  controllers: [HardwareDevicesController, DeviceStatusController],
+  controllers: [HardwareDevicesController, DeviceStatusController, FirmwareContractController],
   providers: [HardwareDevicesService],
   exports: [HardwareDevicesService],
 })

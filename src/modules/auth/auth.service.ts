@@ -284,51 +284,75 @@ export class AuthService {
     if (deviceId && session.deviceId !== deviceId) throw this.invalidRefresh();
     if (!this.safeEqual(session.tokenHash, this.hashToken(secret)))
       throw this.invalidRefresh();
-
-    session.revokedAt = new Date();
-    await session.save();
+    await this.usersService.assertSession(
+      session.userId.toString(),
+      session.sessionKey
+    );
+    const consumed = await this.sessionModel.updateOne(
+      { _id: session._id, revokedAt: { $exists: false } },
+      { $set: { revokedAt: new Date() } }
+    );
+    if (!consumed.modifiedCount) throw this.invalidRefresh();
     const user = await this.usersService.findById(session.userId.toString());
     if (!user || user.status !== 'active') throw this.invalidRefresh();
-    return this.createSession(user, session.deviceId);
+    return this.createSession(user, session.deviceId, session.sessionKey);
   }
 
   async logout(rawToken: string) {
-    const [sessionId] = rawToken.split('.');
-    if (Types.ObjectId.isValid(sessionId)) {
-      await this.sessionModel.updateOne(
-        { _id: sessionId, revokedAt: { $exists: false } },
-        { $set: { revokedAt: new Date() } }
-      );
+    const [sessionId, secret] = rawToken.split('.');
+    if (Types.ObjectId.isValid(sessionId) && secret) {
+      const session = await this.sessionModel
+        .findById(sessionId)
+        .select('+tokenHash');
+      if (
+        session &&
+        !session.revokedAt &&
+        session.expiresAt > new Date() &&
+        this.safeEqual(session.tokenHash, this.hashToken(secret))
+      ) {
+        await this.sessionModel.updateOne(
+          { _id: sessionId },
+          { $set: { revokedAt: new Date() } }
+        );
+        await this.usersService.revokeSession(
+          session.userId.toString(),
+          session.sessionKey
+        );
+      }
     }
     return { loggedOut: true };
   }
 
-  private async createSession(user: UserDocument, deviceId: string) {
-    if (user.userType === 'device_owner') {
-      await this.sessionModel.updateMany(
-        {
-          userId: user._id,
-          deviceId: { $ne: deviceId },
-          revokedAt: { $exists: false },
-        },
-        { $set: { revokedAt: new Date() } }
-      );
-    }
+  async createSession(
+    user: UserDocument,
+    deviceId: string,
+    existingKey?: string
+  ) {
+    const sessionKey = existingKey || randomBytes(32).toString('hex');
+    if (existingKey)
+      await this.usersService.assertSession(user._id.toString(), sessionKey);
+    else
+      await this.usersService.activateSession(user._id.toString(), sessionKey);
     const secret = randomBytes(32).toString('base64url');
     const expiresAt = new Date(Date.now() + this.refreshTtlDays * 86_400_000);
     const session = await this.sessionModel.create({
       userId: user._id,
       tokenHash: this.hashToken(secret),
       deviceId,
+      sessionKey,
       expiresAt,
     });
     const accessToken = await this.jwtService.signAsync({
       sub: user._id.toString(),
       email: user.email,
       type: 'access',
+      sessionKey,
+      deviceId,
     });
     const safeUser = user.toObject();
     delete (safeUser as { passwordHash?: string }).passwordHash;
+    delete safeUser.activeSessionKey;
+    delete safeUser.avatarData;
     return {
       accessToken,
       refreshToken: `${session._id.toString()}.${secret}`,

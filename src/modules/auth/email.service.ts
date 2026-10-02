@@ -32,7 +32,12 @@ export class EmailService {
       : null;
   }
 
-  async sendOtp(email: string, code: string, expiresInMinutes: number) {
+  async sendOtp(
+    email: string,
+    code: string,
+    expiresInMinutes: number,
+    context?: { purpose: 'phone_update' | 'account_delete'; phone?: string }
+  ) {
     if (!this.transporter) {
       if (this.config.get('EMAIL_DEV_LOG_OTP') === 'true') {
         this.logger.warn(`[DEV ONLY] OTP for ${email}: ${code}`);
@@ -44,12 +49,18 @@ export class EmailService {
       });
     }
 
+    const action =
+      context?.purpose === 'account_delete'
+        ? 'xóa tài khoản HEROS và dữ liệu liên quan'
+        : context?.purpose === 'phone_update'
+          ? `cập nhật số điện thoại thành ${context.phone}`
+          : 'đăng nhập HEROS';
     await this.transporter.sendMail({
       from: this.config.get<string>('EMAIL_FROM'),
       to: email,
-      subject: 'Mã đăng nhập SOS của bạn',
-      text: `Mã OTP của bạn là ${code}. Mã hết hạn sau ${expiresInMinutes} phút. Không chia sẻ mã này với bất kỳ ai.`,
-      html: `<p>Mã OTP của bạn là <strong>${code}</strong>.</p><p>Mã hết hạn sau ${expiresInMinutes} phút. Không chia sẻ mã này với bất kỳ ai.</p>`,
+      subject: `Mã xác nhận ${action}`,
+      text: `Mã xác nhận ${action}: ${code}. Mã hết hạn sau ${expiresInMinutes} phút. Không chia sẻ mã này với bất kỳ ai. Nếu không yêu cầu thao tác này, hãy bỏ qua email.`,
+      html: `<p>Mã xác nhận ${this.escapeHtml(action)}: <strong>${code}</strong>.</p><p>Mã hết hạn sau ${expiresInMinutes} phút. Không chia sẻ mã này với bất kỳ ai. Nếu không yêu cầu thao tác này, hãy bỏ qua email.</p>`,
     });
   }
 

@@ -11,6 +11,7 @@ describe('AuthService password login', () => {
       }),
     };
     const usersService = {
+      activateSession: jest.fn().mockResolvedValue(undefined),
       findByEmailWithPassword: jest.fn().mockResolvedValue(user),
     };
     const jwtService = {

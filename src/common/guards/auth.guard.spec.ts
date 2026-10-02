@@ -20,7 +20,8 @@ describe('AuthGuard', () => {
       {
         getAllAndOverride: jest.fn().mockReturnValue(true),
       } as unknown as Reflector,
-      {} as JwtService
+      {} as JwtService,
+      {} as any
     );
 
     await expect(guard.canActivate(createContext())).resolves.toBe(true);
@@ -37,7 +38,8 @@ describe('AuthGuard', () => {
           email: 'a@b.com',
           type: 'access',
         }),
-      } as unknown as JwtService
+      } as unknown as JwtService,
+      { assertSession: jest.fn().mockResolvedValue(undefined) } as any
     );
 
     await expect(
@@ -56,7 +58,8 @@ describe('AuthGuard', () => {
       } as unknown as Reflector,
       {
         verifyAsync: jest.fn().mockRejectedValue(new Error('invalid')),
-      } as unknown as JwtService
+      } as unknown as JwtService,
+      { assertSession: jest.fn().mockResolvedValue(undefined) } as any
     );
 
     await expect(

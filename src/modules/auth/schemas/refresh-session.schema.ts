@@ -20,6 +20,9 @@ export class RefreshSession {
   deviceId: string;
 
   @Prop({ required: true })
+  sessionKey: string;
+
+  @Prop({ required: true })
   expiresAt: Date;
 
   @Prop()

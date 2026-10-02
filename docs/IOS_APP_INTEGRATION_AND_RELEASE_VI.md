@@ -20,17 +20,19 @@ Home là bản đồ. Marker SOS mở sheet gồm tên, avatar (có thể thiế
 
 Đã có: đăng ký/email OTP/password/Google, quản lý contact, SOS từ app hoặc device, GPS, FCM, Socket.IO, upload/play/delete recording, giữ recording 30 ngày, telemetry pin, lời mời tài khoản có sẵn. Bản thay đổi cùng tài liệu này thêm mời người chưa có tài khoản bằng mã/link, trang cài đặt, config và AASA.
 
-Các giới hạn hiện tại phải xử lý/kiểm thử trước public release, không coi là đã hoàn thành:
+**Cập nhật 02/10/2026:** đã bổ sung Apple login/link có xác minh token, OTP email cho thao tác đổi SĐT, API xóa tài khoản có retry, single active session, kiểm tra lại quyền người thân, avatar, hardware GPS và upload clip. Contract/payload/cURL và migration deploy: [BACKEND_API_COMPLETION_VI.md](BACKEND_API_COMPLETION_VI.md). Đọc bản bổ sung trước khi tích hợp; token legacy phải login lại và FCM phải đăng ký lại sau login.
 
-- Chưa có API xóa tài khoản. UI “xóa” phải thực sự kích hoạt quy trình xóa dữ liệu; không dùng logout thay thế.
-- Có Google login nhưng chưa có Sign in with Apple. Chọn email/password cho bản đầu hoặc bổ sung lựa chọn login đáp ứng guideline 4.8 trước khi đưa Google login vào app phát hành.
+Các giới hạn còn phải xử lý/kiểm thử trước public release:
+
+- API xóa tài khoản trả 202 và chạy worker dọn dữ liệu. Cần xử lý retention backup và revoke authorization Apple trước phát hành dùng Apple login.
+- Apple login cần APPLE_CLIENT_IDS/entitlement thật và kiểm thử trên iOS. Không chỉ gửi appleId/email tự khai để lấy access token.
 - SĐT unique và bắt buộc khi đăng ký email nhưng chưa có SMS OTP; đây chưa phải xác minh quyền sở hữu SĐT. Ngày sinh/tên là tự khai, không phải KYC.
 - Một owner có unique hardware index, nhưng đăng ký owner chưa bắt buộc serial, chưa xác minh serial thuộc hàng đã sản xuất. Pair API là cấp credential, không phải bằng chứng sở hữu vật lý.
-- Đăng nhập owner trên máy khác chỉ revoke refresh session cũ. Access JWT cũ và socket cũ có thể tiếp tục hoạt động tới khi hết hạn/ngắt kết nối. Chưa bảo đảm “chỉ một điện thoại hoạt động” tuyệt đối.
+- Session cũ bị chặn ở HTTP/refresh/socket delivery/push. Không thể cam kết chống sao chép cùng token sang máy khác nếu chưa có device attestation/key binding.
 - Contact limit hiện là count trước insert, cần chống race khi thêm đồng thời. Dữ liệu contact cũ thiếu `invitationStatus` cần migration có kiểm soát; default Mongoose có thể khiến liên hệ cũ thành `unlinked`.
-- Hủy contact chưa thu hồi ngay recipient snapshot trong SOS đang diễn ra. Cần backend xử lý trước khi cam kết hủy quan hệ là mất toàn bộ quyền SOS lập tức.
-- Recording dọn mỗi 6 giờ: playback chặn ngay hết hạn, file có thể còn tới lần dọn kế tiếp. Job hiện chưa có retry/quan sát lỗi đầy đủ; API list có thể còn metadata expired trước cleanup. Storage là local disk, cần persistent volume, backup policy và quản lý nhiều instance.
-- Chưa có API avatar upload, SOS decline riêng, hardware upload audio hay hardware cập nhật GPS liên tục. Device hiện chỉ tạo SOS/ping/báo pin; GPS/recording tiếp theo do app owner gửi.
+- Hủy contact chặn những lần đọc/emit SOS tiếp theo; không thu hồi được dữ liệu đã tải hoặc response đang truyền trước khi hủy.
+- Recording dọn mỗi 6 giờ, có retry và storage health. Production phải dùng persistent path ngoài repo, migrate file cũ, thiết lập backup/restore thật và chốt retention backup. Playback/list chặn ngay hết hạn, file vật lý có thể trễ.
+- Avatar và hardware GPS/audio đã có route; audio là clip hoàn chỉnh, không phải WebRTC. Chưa có SOS decline riêng.
 - Chưa có quy ước nút/LED từ firmware. Không viết hướng dẫn bấm/đèn giả định.
 
 ## 3. Cấu hình môi trường
@@ -243,7 +245,7 @@ GPS GeoJSON `coordinates` có thứ tự `[longitude, latitude]`. Reconnect ph�
 
 ## 11. Recording, SMS và cuộc gọi
 
-`POST /sos/{id}/recordings`: multipart gồm `audio` binary và `durationSeconds`. AAC/M4A/MP4 audio/MP3/OGG/WAV; mỗi clip tối đa 10 MiB và 120 giây, mỗi SOS tối đa 20 clips và 100 MiB. Đây là upload các clip, không phải truyền audio realtime vô hạn. Khi vượt limit phải xử lý `SOS_RECORDING_LIMIT_REACHED`.
+`POST /sos/{id}/recordings`: multipart gồm `audio` binary, `durationSeconds` và tùy chọn `clientRecordingId` UUID để retry không trùng. AAC/M4A/MP4 audio/MP3/OGG/WAV; mỗi clip tối đa 10 MiB và 120 giây, mỗi SOS tối đa 600 clips và 100 MiB. Hardware dùng `/device/sos/{id}/recordings` và bắt buộc `clientRecordingId`. Đây là upload các clip, không phải truyền audio realtime vô hạn. Khi vượt limit phải xử lý `SOS_RECORDING_LIMIT_REACHED`.
 
 `GET /sos/{id}/recordings/{recordingId}` trả audio binary, không bọc JSON. Dùng Authorization header; không nối JWT vào query. iOS dùng URLSession có auth với cache policy phù hợp rồi phát dữ liệu tạm; đừng dùng đường dẫn playback làm URL public. Player có thể nhận 403 sau resolve và 404 khi file bị xóa/hết hạn.
 

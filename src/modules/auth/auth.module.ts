@@ -7,6 +7,9 @@ import { AuthService } from './auth.service';
 import { EmailService } from './email.service';
 import { RegistrationController } from './registration.controller';
 import { PasswordService } from './password.service';
+import { AppleAuthService } from './apple-auth.service';
+import { AppleAuthController } from './apple-auth.controller';
+import { AppleTokenUse, AppleTokenUseSchema } from './schemas/apple-token-use.schema';
 import { EmailOtp, EmailOtpSchema } from './schemas/email-otp.schema';
 import {
   RefreshSession,
@@ -19,10 +22,11 @@ import {
     MongooseModule.forFeature([
       { name: EmailOtp.name, schema: EmailOtpSchema },
       { name: RefreshSession.name, schema: RefreshSessionSchema },
+      { name: AppleTokenUse.name, schema: AppleTokenUseSchema },
     ]),
   ],
-  controllers: [AuthController, RegistrationController],
-  providers: [AuthService, AuthRateLimitService, EmailService, PasswordService],
+  controllers: [AuthController, RegistrationController, AppleAuthController],
+  providers: [AuthService, AuthRateLimitService, EmailService, PasswordService, AppleAuthService],
   exports: [AuthService, EmailService, PasswordService],
 })
 export class AuthModule {}

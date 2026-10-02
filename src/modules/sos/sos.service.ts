@@ -5,6 +5,7 @@ import {
   HttpException,
   HttpStatus,
   Injectable,
+  Logger,
   NotFoundException,
   OnModuleDestroy,
   OnModuleInit,
@@ -12,8 +13,17 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { createReadStream } from 'node:fs';
-import { access, mkdir, unlink, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import {
+  access,
+  mkdir,
+  readdir,
+  stat,
+  statfs,
+  unlink,
+  writeFile,
+} from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { isAbsolute, join, resolve } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { Model, Types } from 'mongoose';
 import { EmergencyContactsService } from '../emergency-contacts/emergency-contacts.service';
@@ -31,14 +41,17 @@ import { SosEvent, SosEventDocument } from './schemas/sos-event.schema';
 import { SosGateway } from './sos.gateway';
 
 const ACTIVE_STATUSES = ['active', 'acknowledged'];
-const MAX_RECORDINGS_PER_SOS = 20;
+const MAX_RECORDINGS_PER_SOS = 600;
 const MAX_RECORDING_BYTES_PER_SOS = 100 * 1024 * 1024;
 const RECORDING_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 @Injectable()
 export class SosService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(SosService.name);
   private readonly recordingsDirectory: string;
   private cleanupTimer?: ReturnType<typeof setInterval>;
+  private cleanupRunning = false;
+  private cleanupStatus = { lastSuccessAt: null as string | null, failures: 0 };
 
   constructor(
     @InjectModel(SosEvent.name)
@@ -52,12 +65,26 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
     this.recordingsDirectory =
       config.get<string>('SOS_RECORDINGS_DIR') ||
       join(process.cwd(), 'private_uploads', 'sos-recordings');
+    if (
+      config.get('NODE_ENV') === 'production' &&
+      (!isAbsolute(this.recordingsDirectory) ||
+        resolve(this.recordingsDirectory).startsWith(`${process.cwd()}/`))
+    ) {
+      throw new Error(
+        'Production SOS_RECORDINGS_DIR must be an absolute persistent path outside the deployment directory'
+      );
+    }
   }
 
   onModuleInit() {
-    void this.cleanupExpiredRecordings().catch(() => undefined);
+    void this.cleanupExpiredRecordings().catch(() =>
+      this.logger.error('RECORDING_CLEANUP_FAILED')
+    );
     this.cleanupTimer = setInterval(
-      () => void this.cleanupExpiredRecordings().catch(() => undefined),
+      () =>
+        void this.cleanupExpiredRecordings().catch(() =>
+          this.logger.error('RECORDING_CLEANUP_FAILED')
+        ),
       6 * 60 * 60 * 1000
     );
     this.cleanupTimer.unref();
@@ -107,14 +134,14 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
     const pushUserIds = new Set<string>();
     const recipients: Array<Record<string, unknown>> = [];
     for (const contact of contacts) {
-      const invitationAccepted =
-        !contact.invitationStatus || contact.invitationStatus === 'accepted';
+      const invitationAccepted = contact.invitationStatus === 'accepted';
       const linkedUserId = invitationAccepted
         ? contact.linkedUserId?.toString()
         : undefined;
       if (linkedUserId) seenUsers.add(linkedUserId);
       if (contact.pushEnabled && linkedUserId) pushUserIds.add(linkedUserId);
       recipients.push({
+        contactId: contact._id,
         type: 'emergency_contact',
         userId: linkedUserId ? new Types.ObjectId(linkedUserId) : undefined,
         name: contact.name,
@@ -175,7 +202,9 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
         .map((contact) => contact.email),
     });
     for (const recipientId of seenUsers) {
-      this.gateway.notifyUser(recipientId, 'sos.created', {
+      if (!(await this.contactsService.isAccepted(ownerId, recipientId)))
+        continue;
+      await this.gateway.notifyUser(recipientId, 'sos.created', {
         id: event._id,
         code: event.code,
         ownerName: owner.fullName || 'Một người dùng',
@@ -203,7 +232,14 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
       })
       .sort({ startedAt: -1 })
       .exec();
-    return events.map((event) => this.toMobileResponse(event, userId));
+    const visible = [];
+    for (const event of events) {
+      await this.filterRecipients(event);
+      if (event.recipients.some((r) => r.userId?.toString() === userId)) {
+        visible.push(await this.toMobileResponse(event, userId));
+      }
+    }
+    return visible;
   }
 
   async getOne(userId: string, id: string) {
@@ -213,6 +249,9 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
 
   async updateLocation(ownerId: string, id: string, dto: UpdateSosLocationDto) {
     this.assertObjectId(id);
+    if (new Date(dto.recordedAt).getTime() > Date.now() + 60_000) {
+      throw new BadRequestException({ code: 'LOCATION_TIME_INVALID' });
+    }
     const location = {
       type: 'Point',
       coordinates: [dto.longitude, dto.latitude],
@@ -221,12 +260,25 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
       address: dto.address?.trim(),
     };
     const event = await this.sosModel.findOneAndUpdate(
-      { _id: id, ownerId, status: { $in: ACTIVE_STATUSES } },
+      {
+        _id: id,
+        ownerId,
+        status: { $in: ACTIVE_STATUSES },
+        'currentLocation.recordedAt': { $lt: location.recordedAt },
+      },
       { $set: { currentLocation: location } },
       { new: true, runValidators: true }
     );
-    if (!event) throw new NotFoundException('Active SOS event not found');
-    this.notifyAcknowledgedRecipients(event, 'sos.location', {
+    if (!event) {
+      const current = await this.sosModel.findOne({
+        _id: id,
+        ownerId,
+        status: { $in: ACTIVE_STATUSES },
+      });
+      if (!current) throw new NotFoundException('Active SOS event not found');
+      return this.toMobileResponse(current);
+    }
+    await this.notifyAcknowledgedRecipients(event, 'sos.location', {
       sosId: id,
       location,
     });
@@ -288,6 +340,7 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
     if (!acknowledged) {
       throw new NotFoundException('Active SOS event not found');
     }
+    await this.filterRecipients(event);
     const responderCount = this.responderCount(event);
     const payload = {
       sosId: event._id,
@@ -295,12 +348,12 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
       responderCount,
       supportMode: dto.supportMode,
     };
-    this.gateway.notifyUser(
+    await this.gateway.notifyUser(
       event.ownerId.toString(),
       'sos.acknowledged',
       payload
     );
-    this.notifyRecipients(event, 'sos.acknowledged', payload);
+    await this.notifyRecipients(event, 'sos.acknowledged', payload);
     return this.toMobileResponse(event, userId);
   }
 
@@ -312,12 +365,28 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
   ) {
     this.assertObjectId(id);
     this.validateAudioFile(file);
+    if (dto.clientRecordingId) {
+      const previous = await this.sosModel.findOne({
+        _id: id,
+        ownerId,
+        'recordings.clientRecordingId': dto.clientRecordingId,
+      });
+      const recording = previous?.recordings.find(
+        (r) => r.clientRecordingId === dto.clientRecordingId
+      );
+      if (recording) return this.recordingResponse(id, recording);
+    }
     const storageKey = `${randomUUID()}${this.extensionFor(file.mimetype)}`;
     await mkdir(this.recordingsDirectory, { recursive: true });
     const filePath = join(this.recordingsDirectory, storageKey);
-    await writeFile(filePath, file.buffer, { flag: 'wx', mode: 0o600 });
+    await writeFile(filePath, file.buffer, {
+      flag: 'wx',
+      mode: 0o600,
+      flush: true,
+    });
 
     const recording = {
+      clientRecordingId: dto.clientRecordingId,
       _id: new Types.ObjectId(),
       uploaderId: new Types.ObjectId(ownerId),
       storageKey,
@@ -334,6 +403,9 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
           _id: id,
           ownerId,
           status: { $in: ACTIVE_STATUSES },
+          ...(dto.clientRecordingId
+            ? { 'recordings.clientRecordingId': { $ne: dto.clientRecordingId } }
+            : {}),
           [`recordings.${MAX_RECORDINGS_PER_SOS - 1}`]: { $exists: false },
           $or: [
             { recordingBytes: { $exists: false } },
@@ -356,6 +428,17 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
     }
     if (!event) {
       await unlink(filePath).catch(() => undefined);
+      if (dto.clientRecordingId) {
+        const previous = await this.sosModel.findOne({
+          _id: id,
+          ownerId,
+          'recordings.clientRecordingId': dto.clientRecordingId,
+        });
+        const recording = previous?.recordings.find(
+          (r) => r.clientRecordingId === dto.clientRecordingId
+        );
+        if (recording) return this.recordingResponse(id, recording);
+      }
       const activeEvent = await this.sosModel.exists({
         _id: id,
         ownerId,
@@ -368,8 +451,9 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
     }
 
     const metadata = this.recordingResponse(id, recording);
+    await this.filterRecipients(event);
     const acknowledgedIds = this.acknowledgedRecipientIds(event);
-    this.notifyAcknowledgedRecipients(event, 'sos.recording', {
+    await this.notifyAcknowledgedRecipients(event, 'sos.recording', {
       sosId: id,
       recording: metadata,
     });
@@ -391,6 +475,7 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
     this.assertObjectId(recordingId);
     const event = await this.sosModel.findById(id);
     if (!event) throw new NotFoundException('SOS event not found');
+    await this.filterRecipients(event);
     if (!this.canAccessSensitive(event, userId)) {
       throw new ForbiddenException({ code: 'SOS_ACKNOWLEDGEMENT_REQUIRED' });
     }
@@ -423,13 +508,15 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
       .sort({ startedAt: -1 })
       .exec();
     return events.flatMap((event) =>
-      (event.recordings || []).map((recording) => ({
-        sosId: event._id,
-        sosCode: event.code,
-        sosStatus: event.status,
-        startedAt: event.startedAt,
-        ...this.recordingResponse(event._id.toString(), recording),
-      }))
+      (event.recordings || [])
+        .filter((recording) => this.recordingUnexpired(recording))
+        .map((recording) => ({
+          sosId: event._id,
+          sosCode: event.code,
+          sosStatus: event.status,
+          startedAt: event.startedAt,
+          ...this.recordingResponse(event._id.toString(), recording),
+        }))
     );
   }
 
@@ -443,17 +530,11 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
     );
     if (!recording) throw new NotFoundException('SOS recording not found');
 
-    await unlink(join(this.recordingsDirectory, recording.storageKey)).catch(
-      () => undefined
+    await this.sosModel.updateOne(
+      { _id: event._id, 'recordings._id': recording._id },
+      { $set: { 'recordings.$.expiresAt': new Date() } }
     );
-    event.recordings = event.recordings.filter(
-      (item) => item._id.toString() !== recordingId
-    );
-    event.recordingBytes = event.recordings.reduce(
-      (total, item) => total + item.sizeBytes,
-      0
-    );
-    await event.save();
+    await this.removeStoredRecording(event, recording);
     return { deleted: true };
   }
 
@@ -496,7 +577,10 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
       { new: true }
     );
     if (!event) throw new NotFoundException('Active SOS event not found');
-    this.notifyRecipients(event, `sos.${status}`, { sosId: event._id, status });
+    await this.notifyRecipients(event, `sos.${status}`, {
+      sosId: event._id,
+      status,
+    });
     const owner = await this.usersService.getMe(ownerId);
     this.notificationsService.dispatchPush(
       event.recipients
@@ -526,31 +610,66 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
       ],
     });
     if (!event) throw new NotFoundException('SOS event not found');
+    await this.filterRecipients(event);
+    if (
+      event.ownerId.toString() !== userId &&
+      !event.recipients.some((r) => r.userId?.toString() === userId)
+    ) {
+      throw new ForbiddenException({ code: 'SOS_ACCESS_REVOKED' });
+    }
     return event;
   }
 
-  private notifyRecipients(
+  private async notifyRecipients(
     event: SosEventDocument,
     name: string,
     payload: unknown
   ) {
+    await this.filterRecipients(event);
     const ids = event.recipients
       .map((recipient) => recipient.userId?.toString())
       .filter(Boolean);
-    ids.forEach((userId) => this.gateway.notifyUser(userId, name, payload));
+    for (const userId of ids)
+      await this.gateway.notifyUser(userId, name, payload);
   }
 
-  private notifyAcknowledgedRecipients(
+  private async notifyAcknowledgedRecipients(
     event: SosEventDocument,
     name: string,
     payload: unknown
   ) {
-    this.acknowledgedRecipientIds(event).forEach((userId) =>
-      this.gateway.notifyUser(userId, name, payload)
-    );
+    await this.filterRecipients(event);
+    for (const userId of this.acknowledgedRecipientIds(event))
+      await this.gateway.notifyUser(userId, name, payload);
   }
 
-  private toMobileResponse(event: SosEventDocument, viewerId?: string) {
+  private async filterRecipients(event: SosEventDocument) {
+    const recipients = [];
+    for (const recipient of event.recipients) {
+      if (
+        recipient.contactId &&
+        !(await this.contactsService.exists(
+          event.ownerId.toString(),
+          recipient.contactId.toString()
+        ))
+      )
+        continue;
+      if (
+        !recipient.userId ||
+        (await this.contactsService.isAccepted(
+          event.ownerId.toString(),
+          recipient.userId.toString(),
+          recipient.contactId?.toString()
+        ))
+      ) {
+        recipients.push(recipient);
+      }
+    }
+    event.recipients = recipients;
+  }
+
+  private async toMobileResponse(event: SosEventDocument, viewerId?: string) {
+    await this.filterRecipients(event);
     const isOwner = !viewerId || event.ownerId.toString() === viewerId;
     const isRecipient = Boolean(
       viewerId &&
@@ -591,9 +710,11 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
       response.currentAddress = event.currentLocation.address;
     }
     if (canAccessSensitive) {
-      response.recordings = (event.recordings || []).map((recording) =>
-        this.recordingResponse(event._id.toString(), recording)
-      );
+      response.recordings = (event.recordings || [])
+        .filter((recording) => this.recordingUnexpired(recording))
+        .map((recording) =>
+          this.recordingResponse(event._id.toString(), recording)
+        );
     }
     if (isOwner) {
       response.recipients = event.recipients;
@@ -651,49 +772,146 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  private recordingUnexpired(recording: { createdAt: Date; expiresAt?: Date }) {
+    return (
+      (
+        recording.expiresAt ||
+        new Date(recording.createdAt.getTime() + RECORDING_RETENTION_MS)
+      ).getTime() > Date.now()
+    );
+  }
+
   private async cleanupExpiredRecordings() {
-    const now = new Date();
-    const legacyCutoff = new Date(now.getTime() - RECORDING_RETENTION_MS);
-    const events = await this.sosModel
-      .find({
-        $or: [
-          { 'recordings.expiresAt': { $lte: now } },
-          {
-            recordings: {
-              $elemMatch: {
-                expiresAt: { $exists: false },
-                createdAt: { $lte: legacyCutoff },
+    if (this.cleanupRunning) return;
+    this.cleanupRunning = true;
+    this.cleanupStatus.failures = 0;
+    try {
+      const now = new Date();
+      const legacyCutoff = new Date(now.getTime() - RECORDING_RETENTION_MS);
+      const events = await this.sosModel
+        .find({
+          $or: [
+            { 'recordings.expiresAt': { $lte: now } },
+            {
+              recordings: {
+                $elemMatch: {
+                  expiresAt: { $exists: false },
+                  createdAt: { $lte: legacyCutoff },
+                },
               },
             },
-          },
-        ],
-      })
-      .exec();
-    for (const event of events) {
-      const expired = event.recordings.filter((recording) => {
-        const expiresAt =
-          recording.expiresAt ||
-          new Date(recording.createdAt.getTime() + RECORDING_RETENTION_MS);
-        return expiresAt <= now;
-      });
-      if (!expired.length) continue;
-      await Promise.all(
-        expired.map((recording) =>
-          unlink(join(this.recordingsDirectory, recording.storageKey)).catch(
-            () => undefined
-          )
-        )
-      );
-      const expiredIds = new Set(expired.map((item) => item._id.toString()));
-      event.recordings = event.recordings.filter(
-        (item) => !expiredIds.has(item._id.toString())
-      );
-      event.recordingBytes = event.recordings.reduce(
-        (total, item) => total + item.sizeBytes,
-        0
-      );
-      await event.save();
+          ],
+        })
+        .exec();
+      for (const event of events) {
+        const expired = event.recordings.filter((recording) => {
+          const expiresAt =
+            recording.expiresAt ||
+            new Date(recording.createdAt.getTime() + RECORDING_RETENTION_MS);
+          return expiresAt <= now;
+        });
+        if (!expired.length) continue;
+        for (const recording of expired) {
+          try {
+            await this.removeStoredRecording(event, recording);
+          } catch {
+            this.cleanupStatus.failures++;
+            this.logger.error(
+              `RECORDING_DELETE_RETRY sos=${event._id} recording=${recording._id}`
+            );
+          }
+        }
+      }
+      await this.cleanupOrphans();
+      if (!this.cleanupStatus.failures)
+        this.cleanupStatus.lastSuccessAt = new Date().toISOString();
+    } catch (error) {
+      this.cleanupStatus.failures++;
+      throw error;
+    } finally {
+      this.cleanupRunning = false;
     }
+  }
+
+  private async cleanupOrphans() {
+    await mkdir(this.recordingsDirectory, { recursive: true, mode: 0o700 });
+    for (const name of await readdir(this.recordingsDirectory)) {
+      if (!/^[0-9a-f-]{36}\.(aac|m4a|mp3|ogg|wav)$/.test(name)) continue;
+      const file = join(this.recordingsDirectory, name);
+      try {
+        const info = await stat(file);
+        // Grace period protects files written just before their DB metadata.
+        if (info.mtimeMs > Date.now() - 24 * 60 * 60_000) continue;
+        if (!(await this.sosModel.exists({ 'recordings.storageKey': name })))
+          await unlink(file);
+      } catch (error) {
+        if (error.code !== 'ENOENT') {
+          this.cleanupStatus.failures++;
+          this.logger.error('ORPHAN_RECORDING_DELETE_RETRY');
+        }
+      }
+    }
+  }
+
+  async storageHealth() {
+    try {
+      await mkdir(this.recordingsDirectory, { recursive: true, mode: 0o700 });
+      await access(this.recordingsDirectory, constants.R_OK | constants.W_OK);
+      const space = await statfs(this.recordingsDirectory);
+      const availableBytes = space.bavail * space.bsize;
+      return {
+        status:
+          availableBytes > 100 * 1024 * 1024 && !this.cleanupStatus.failures
+            ? 'ok'
+            : 'degraded',
+        availableBytes,
+        cleanup: this.cleanupStatus,
+      };
+    } catch {
+      return {
+        status: 'degraded',
+        writable: false,
+        cleanup: this.cleanupStatus,
+      };
+    }
+  }
+
+  private async removeStoredRecording(
+    event: SosEventDocument,
+    recording: SosEventDocument['recordings'][number]
+  ) {
+    try {
+      await unlink(join(this.recordingsDirectory, recording.storageKey));
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+    // Keep metadata on IO failure so scheduled cleanup can retry. The predicate
+    // makes the counter update safe when multiple workers delete the same clip.
+    await this.sosModel.updateOne(
+      { _id: event._id, 'recordings._id': recording._id },
+      {
+        $pull: { recordings: { _id: recording._id } },
+        $inc: { recordingBytes: -recording.sizeBytes },
+      }
+    );
+  }
+
+  async deleteOwnedData(ownerId: string) {
+    const events = await this.sosModel.find({ ownerId }).exec();
+    for (const event of events) {
+      await this.notifyRecipients(event, 'sos.cancelled', {
+        sosId: event._id,
+        status: 'cancelled',
+        reason: 'account_deleted',
+      });
+      for (const recording of event.recordings || [])
+        await this.removeStoredRecording(event, recording);
+      await this.sosModel.deleteOne({ _id: event._id });
+    }
+    await this.sosModel.updateMany(
+      { 'recipients.userId': ownerId },
+      { $pull: { recipients: { userId: new Types.ObjectId(ownerId) } } }
+    );
   }
 
   private extensionFor(mimeType: string) {
@@ -718,7 +936,12 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
     mimetype: string;
     size: number;
   }) {
-    if (!file.buffer?.length || file.size < 1) {
+    if (
+      !file.buffer?.length ||
+      file.size < 1 ||
+      file.size !== file.buffer.length ||
+      file.size > 10 * 1024 * 1024
+    ) {
       throw new BadRequestException({ code: 'SOS_AUDIO_EMPTY' });
     }
     const bytes = file.buffer;

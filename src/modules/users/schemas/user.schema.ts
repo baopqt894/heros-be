@@ -32,6 +32,21 @@ export class User {
   @Prop({ index: true, sparse: true, unique: true })
   googleSubject?: string;
 
+  @Prop({ sparse: true, unique: true })
+  appleSubject?: string;
+
+  @Prop({ select: false })
+  activeSessionKey?: string;
+
+  @Prop()
+  phoneVerifiedAt?: Date;
+
+  @Prop()
+  phoneUpdateAuthorizedAt?: Date;
+
+  @Prop({ enum: ['email_otp'] })
+  phoneUpdateAuthorizationMethod?: string;
+
   @Prop({ select: false })
   passwordHash?: string;
 
@@ -40,6 +55,15 @@ export class User {
 
   @Prop()
   avatarUrl?: string;
+
+  @Prop({ type: Buffer, select: false })
+  avatarData?: Buffer;
+
+  @Prop()
+  avatarMimeType?: string;
+
+  @Prop()
+  deletionRequestedAt?: Date;
 
   @Prop()
   dateOfBirth?: Date;
@@ -67,8 +91,8 @@ export class User {
   @Prop({ type: GeoPointSchema })
   lastLocation?: GeoPoint;
 
-  @Prop({ default: 'active', enum: ['active', 'blocked'] })
-  status: 'active' | 'blocked';
+  @Prop({ default: 'active', enum: ['active', 'blocked', 'deleting'] })
+  status: 'active' | 'blocked' | 'deleting';
 
   createdAt: Date;
   updatedAt: Date;

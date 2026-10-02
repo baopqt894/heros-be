@@ -9,6 +9,8 @@ import { SosEvent, SosEventSchema } from './schemas/sos-event.schema';
 import { SosController } from './sos.controller';
 import { SosGateway } from './sos.gateway';
 import { SosService } from './sos.service';
+import { DeviceTelemetryController } from './device-telemetry.controller';
+import { HardwareAuthGuard } from '../hardware-devices/hardware-auth.guard';
 
 @Module({
   imports: [
@@ -20,8 +22,8 @@ import { SosService } from './sos.service';
     NotificationsModule,
     HardwareDevicesModule,
   ],
-  controllers: [SosController, DeviceSosController],
-  providers: [SosService, SosGateway],
+  controllers: [SosController, DeviceSosController, DeviceTelemetryController],
+  providers: [SosService, SosGateway, HardwareAuthGuard],
   exports: [SosService],
 })
 export class SosModule {}

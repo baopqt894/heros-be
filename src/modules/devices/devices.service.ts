@@ -11,12 +11,13 @@ export class DevicesService {
     private readonly deviceModel: Model<DeviceDocument>
   ) {}
 
-  register(userId: string, dto: RegisterDeviceDto) {
+  register(userId: string, dto: RegisterDeviceDto, sessionKey: string) {
     return this.deviceModel.findOneAndUpdate(
       { userId, deviceId: dto.deviceId },
       {
         $set: {
           platform: dto.platform,
+          sessionKey,
           pushToken: dto.pushToken,
           enabled: true,
           lastSeenAt: new Date(),
@@ -38,8 +39,31 @@ export class DevicesService {
   }
 
   async findPushTokens(userIds: string[]): Promise<string[]> {
-    return this.deviceModel
-      .find({ userId: { $in: userIds }, enabled: true })
-      .distinct('pushToken') as Promise<string[]>;
+    const devices = await this.deviceModel.aggregate([
+      {
+        $match: {
+          userId: { $in: userIds.map((id) => new Types.ObjectId(id)) },
+          enabled: true,
+          sessionKey: { $type: 'string' },
+        },
+      },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'userId',
+          foreignField: '_id',
+          as: 'owner',
+        },
+      },
+      { $unwind: '$owner' },
+      {
+        $match: {
+          'owner.status': 'active',
+          $expr: { $eq: ['$sessionKey', '$owner.activeSessionKey'] },
+        },
+      },
+      { $project: { pushToken: 1 } },
+    ]);
+    return [...new Set<string>(devices.map((device) => device.pushToken))];
   }
 }

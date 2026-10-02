@@ -32,6 +32,27 @@ export class EmergencyContactsService {
       .exec();
   }
 
+  async isAccepted(ownerId: string, userId: string, contactId?: string) {
+    const [owner, recipient] = await Promise.all([
+      this.usersService.findById(ownerId),
+      this.usersService.findById(userId),
+    ]);
+    if (owner?.status !== 'active' || recipient?.status !== 'active')
+      return false;
+    return Boolean(
+      await this.contactModel.exists({
+        ownerId,
+        linkedUserId: userId,
+        invitationStatus: 'accepted',
+        ...(contactId ? { _id: contactId } : {}),
+      })
+    );
+  }
+
+  async exists(ownerId: string, contactId: string) {
+    return Boolean(await this.contactModel.exists({ _id: contactId, ownerId }));
+  }
+
   async create(ownerId: string, dto: CreateEmergencyContactDto) {
     const owner = await this.usersService.getMe(ownerId);
     if (owner.userType !== 'device_owner') {
