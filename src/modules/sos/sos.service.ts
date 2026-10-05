@@ -282,6 +282,10 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
       sosId: id,
       location,
     });
+    await this.gateway.notifyUser(ownerId, 'sos.location', {
+      sosId: id,
+      location,
+    });
     return this.toMobileResponse(event);
   }
 
@@ -354,6 +358,13 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
       payload
     );
     await this.notifyRecipients(event, 'sos.acknowledged', payload);
+    await this.notifyChatMembers(id, 'sos.chat.member_joined', {
+      chatId: id,
+      sosId: id,
+      userId,
+      joinedAt: event.recipients.find((r) => r.userId?.toString() === userId)
+        ?.acknowledgedAt,
+    });
     return this.toMobileResponse(event, userId);
   }
 
@@ -454,6 +465,10 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
     await this.filterRecipients(event);
     const acknowledgedIds = this.acknowledgedRecipientIds(event);
     await this.notifyAcknowledgedRecipients(event, 'sos.recording', {
+      sosId: id,
+      recording: metadata,
+    });
+    await this.gateway.notifyUser(ownerId, 'sos.recording', {
       sosId: id,
       recording: metadata,
     });
@@ -581,6 +596,15 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
       sosId: event._id,
       status,
     });
+    const closed = {
+      chatId: id,
+      sosId: id,
+      status: 'closed',
+      reason: status,
+      closedAt: event[timestampField],
+    };
+    await this.gateway.notifyUser(ownerId, 'sos.chat.closed', closed);
+    await this.notifyAcknowledgedRecipients(event, 'sos.chat.closed', closed);
     const owner = await this.usersService.getMe(ownerId);
     this.notificationsService.dispatchPush(
       event.recipients
@@ -618,6 +642,59 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
       throw new ForbiddenException({ code: 'SOS_ACCESS_REVOKED' });
     }
     return event;
+  }
+
+  async getChatContext(userId: string, id: string, writing = false) {
+    const event = await this.findAccessible(userId, id);
+    const owner = await this.usersService.findById(event.ownerId.toString());
+    if (!owner || owner.status !== 'active')
+      throw new ForbiddenException({ code: 'SOS_CHAT_ACCESS_REVOKED' });
+    const active = ACTIVE_STATUSES.includes(event.status);
+    if (event.ownerId.toString() !== userId) {
+      if (!active) throw new ForbiddenException({ code: 'SOS_CHAT_CLOSED' });
+      if (
+        !event.recipients.some(
+          (r) => r.userId?.toString() === userId && r.acknowledgedAt
+        )
+      ) {
+        throw new ForbiddenException({
+          code: 'SOS_CHAT_ACKNOWLEDGEMENT_REQUIRED',
+        });
+      }
+    }
+    if (writing && !active)
+      throw new ConflictException({ code: 'SOS_CHAT_CLOSED' });
+    return event;
+  }
+
+  async notifyChatMembers(id: string, name: string, payload: unknown) {
+    const event = await this.sosModel.findById(id);
+    if (!event || !ACTIVE_STATUSES.includes(event.status))
+      return [] as string[];
+    const memberIds = [
+      ...new Set([
+        event.ownerId.toString(),
+        ...this.acknowledgedRecipientIds(event),
+      ]),
+    ];
+    const authorized: string[] = [];
+    for (const userId of memberIds) {
+      try {
+        // Recheck membership at delivery; no client-controlled room joins.
+        await this.getChatContext(userId, id, true);
+        authorized.push(userId);
+        await this.gateway.notifyUser(userId, name, payload);
+      } catch (error) {
+        if (!(
+          error instanceof ForbiddenException ||
+          error instanceof NotFoundException ||
+          error instanceof ConflictException
+        )) {
+          this.logger.warn(`SOS_CHAT_DELIVERY_FAILED sos=${id}`);
+        }
+      }
+    }
+    return authorized;
   }
 
   private async notifyRecipients(
@@ -697,6 +774,8 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
       cancelledAt: event.cancelledAt,
       cancelReason: event.cancelReason,
       responderCount: this.responderCount(event),
+      chatId: canAccessSensitive ? event._id.toString() : null,
+      chatPath: canAccessSensitive ? `/v1/sos-chats/${event._id}` : null,
       viewerAcknowledged: isOwner
         ? false
         : event.recipients.some(
@@ -787,6 +866,10 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
     this.cleanupStatus.failures = 0;
     try {
       const now = new Date();
+      await this.sosModel.updateMany(
+        { 'chatMessages.expiresAt': { $lte: now } },
+        { $pull: { chatMessages: { expiresAt: { $lte: now } } } }
+      );
       const legacyCutoff = new Date(now.getTime() - RECORDING_RETENTION_MS);
       const events = await this.sosModel
         .find({
@@ -911,6 +994,10 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
     await this.sosModel.updateMany(
       { 'recipients.userId': ownerId },
       { $pull: { recipients: { userId: new Types.ObjectId(ownerId) } } }
+    );
+    await this.sosModel.updateMany(
+      { 'chatMessages.senderId': ownerId },
+      { $pull: { chatMessages: { senderId: new Types.ObjectId(ownerId) } } }
     );
   }
 

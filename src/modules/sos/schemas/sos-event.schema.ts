@@ -1,5 +1,9 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
+import {
+  SosChatMessage,
+  SosChatMessageSchema,
+} from './sos-chat-message.schema';
 
 export type SosEventDocument = HydratedDocument<SosEvent>;
 
@@ -132,6 +136,14 @@ export class SosEvent {
   @Prop({ default: 0, min: 0 })
   recordingBytes: number;
 
+  @Prop({ default: 0, min: 0 })
+  chatSequence: number;
+
+  // Bounded embedded messages allow append, sequence and SOS-close checks to
+  // share one atomic write. Exclude text from normal SOS/GPS queries.
+  @Prop({ default: [], type: [SosChatMessageSchema], select: false })
+  chatMessages: SosChatMessage[];
+
   @Prop({
     default: 'not_opened',
     enum: ['not_opened', 'composer_opened', 'user_reported_sent'],
@@ -156,3 +168,6 @@ SosEventSchema.index({ ownerId: 1, clientRequestId: 1 }, { unique: true });
 SosEventSchema.index({ ownerId: 1, status: 1, startedAt: -1 });
 SosEventSchema.index({ currentLocation: '2dsphere' });
 SosEventSchema.index({ 'recordings.expiresAt': 1 });
+SosEventSchema.index({ 'chatMessages.expiresAt': 1 });
+SosEventSchema.index({ 'chatMessages.senderId': 1 });
+SosEventSchema.index({ 'recipients.userId': 1, status: 1, _id: -1 });

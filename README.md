@@ -10,6 +10,9 @@ limitations: [Backend API completion guide (Vietnamese)](docs/BACKEND_API_COMPLE
 Includes Apple login/link, account deletion, email-authorized phone updates,
 Limgrow-hosted avatar URLs and hardware GPS/audio clip uploads.
 
+SOS rescue group chat API, realtime events and mobile integration:
+[SOS group chat guide (Vietnamese)](docs/SOS_GROUP_CHAT_MOBILE_VI.md).
+
 ## Setup
 
 ```bash

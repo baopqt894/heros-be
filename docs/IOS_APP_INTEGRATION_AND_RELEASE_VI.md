@@ -18,6 +18,8 @@ Home là bản đồ. Marker SOS mở sheet gồm tên, avatar (có thể thiế
 
 ## 2. Trạng thái thật và các việc còn thiếu trước phát hành
 
+**Bổ sung 05/10/2026:** mỗi SOS có nhóm chat cho owner và người đã acknowledge. API text, lịch sử, realtime, quyền audio/GPS và flow đóng nhóm: [SOS_GROUP_CHAT_MOBILE_VI.md](SOS_GROUP_CHAT_MOBILE_VI.md).
+
 Đã có: đăng ký/email OTP/password/Google, quản lý contact, SOS từ app hoặc device, GPS, FCM, Socket.IO, upload/play/delete recording, giữ recording 30 ngày, telemetry pin, lời mời tài khoản có sẵn. Bản thay đổi cùng tài liệu này thêm mời người chưa có tài khoản bằng mã/link, trang cài đặt, config và AASA.
 
 **Cập nhật 02/10/2026:** đã bổ sung Apple login/link có xác minh token, OTP email cho thao tác đổi SĐT, API xóa tài khoản có retry, single active session, kiểm tra lại quyền người thân, avatar, hardware GPS và upload clip. Contract/payload/cURL và migration deploy: [BACKEND_API_COMPLETION_VI.md](BACKEND_API_COMPLETION_VI.md). Đọc bản bổ sung trước khi tích hợp; token legacy phải login lại và FCM phải đăng ký lại sau login.

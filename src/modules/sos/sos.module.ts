@@ -11,6 +11,8 @@ import { SosGateway } from './sos.gateway';
 import { SosService } from './sos.service';
 import { DeviceTelemetryController } from './device-telemetry.controller';
 import { HardwareAuthGuard } from '../hardware-devices/hardware-auth.guard';
+import { SosChatService } from './sos-chat.service';
+import { SosChatController } from './sos-chat.controller';
 
 @Module({
   imports: [
@@ -22,8 +24,13 @@ import { HardwareAuthGuard } from '../hardware-devices/hardware-auth.guard';
     NotificationsModule,
     HardwareDevicesModule,
   ],
-  controllers: [SosController, DeviceSosController, DeviceTelemetryController],
-  providers: [SosService, SosGateway, HardwareAuthGuard],
+  controllers: [
+    SosController,
+    DeviceSosController,
+    DeviceTelemetryController,
+    SosChatController,
+  ],
+  providers: [SosService, SosGateway, HardwareAuthGuard, SosChatService],
   exports: [SosService],
 })
 export class SosModule {}

@@ -34,6 +34,7 @@ export class SosGateway implements OnGatewayConnection {
       await this.users.assertSession(user.sub, user.sessionKey);
       socket.data.user = user;
       await socket.join(`user:${user.sub}`);
+      socket.emit('sos.ready', { userId: user.sub });
     } catch {
       socket.disconnect(true);
     }

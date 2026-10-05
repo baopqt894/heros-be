@@ -6,6 +6,8 @@ import { mkdir, mkdtemp, readdir, rename, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { Types } from 'mongoose';
+import { io, Socket } from 'socket.io-client';
 import { AuthService } from '../modules/auth/auth.service';
 import { EmailService } from '../modules/auth/email.service';
 import { NotificationsService } from '../modules/notifications/notifications.service';
@@ -36,6 +38,64 @@ describe('Backend contracts against isolated MongoDB', () => {
   let recordingId: string;
   const sendOtp = jest.fn().mockResolvedValue(undefined);
   const previousEnv = { ...process.env };
+  const sockets: Socket[] = [];
+  const received: Record<string, any[]> = {
+    owner: [],
+    contact: [],
+    outsider: [],
+  };
+  let firstChatMessage: any;
+
+  async function connectChat(label: string, token: string) {
+    const socket = io(`${base.replace(/\/v1$/, '')}/sos`, {
+      auth: { token },
+      transports: ['websocket'],
+      reconnection: false,
+      autoConnect: false,
+    });
+    sockets.push(socket);
+    socket.onAny((name, payload) => received[label].push({ name, payload }));
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error('Socket readiness timed out')),
+        5000
+      );
+      socket.once('sos.ready', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      socket.once('connect_error', (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+      socket.connect();
+    });
+    return socket;
+  }
+
+  async function chatFixture(recipients: any[] = []) {
+    return app.get(getModelToken('SosEvent')).create({
+      ownerId: owner._id,
+      ownerName: 'Owner',
+      code: `TEST-${randomUUID()}`,
+      clientRequestId: randomUUID(),
+      message: 'Isolated chat fixture',
+      initialLocation: {
+        type: 'Point',
+        coordinates: [106, 10],
+        accuracy: 5,
+        recordedAt: new Date(),
+      },
+      currentLocation: {
+        type: 'Point',
+        coordinates: [106, 10],
+        accuracy: 5,
+        recordedAt: new Date(),
+      },
+      recipients,
+      startedAt: new Date(),
+    });
+  }
 
   async function request(
     path: string,
@@ -156,6 +216,7 @@ describe('Backend contracts against isolated MongoDB', () => {
       .accessToken;
   });
   afterAll(async () => {
+    sockets.forEach((socket) => socket.disconnect());
     if (app) await app.close();
     if (mongo) await mongo.stop();
     if (directory) await rm(directory, { recursive: true, force: true });
@@ -365,7 +426,221 @@ describe('Backend contracts against isolated MongoDB', () => {
     expect(await readdir(directory)).toHaveLength(1);
   });
 
-  it('revokes an accepted contact immediately for detail, incoming list and playback', async () => {
+  it('adds only acknowledged responders to the shared chat, with GPS and recordings', async () => {
+    await connectChat('owner', ownerToken);
+    await connectChat('contact', contactToken);
+    await connectChat('outsider', outsiderToken);
+    const ownerRoom = await request(`/sos-chats/${eventId}`);
+    expect(ownerRoom.status).toBe(200);
+    expect(ownerRoom.body.data.members.map((m) => m.userId)).toEqual([
+      owner.id,
+    ]);
+    expect(
+      (await request(`/sos-chats/${eventId}`, 'GET', undefined, contactToken))
+        .status
+    ).toBe(403);
+    expect(
+      (
+        await request(
+          `/sos-chats/${eventId}/messages`,
+          'POST',
+          { clientMessageId: randomUUID(), text: 'Not accepted yet' },
+          contactToken
+        )
+      ).status
+    ).toBe(403);
+    expect(
+      (await request('/sos-chats', 'GET', undefined, contactToken)).body.data
+        .items
+    ).toEqual([]);
+    const accepted = await request(
+      `/sos/${eventId}/acknowledge`,
+      'POST',
+      { supportMode: 'remote' },
+      contactToken
+    );
+    expect(accepted.body.data.chatId).toBe(eventId);
+    const room = await request(
+      `/sos-chats/${eventId}`,
+      'GET',
+      undefined,
+      contactToken
+    );
+    expect(room.body.data.members).toHaveLength(2);
+    expect(
+      room.body.data.members.find((m) => m.userId === contact.id).supportMode
+    ).toBe('remote');
+    expect(room.body.data.currentLocation.coordinates).toEqual([107, 11]);
+    expect(room.body.data.recordings[0].id).toBe(recordingId);
+    expect(JSON.stringify(room.body.data)).not.toContain(
+      'contact@test.invalid'
+    );
+    expect(
+      (await request('/sos-chats', 'GET', undefined, contactToken)).body.data
+        .items[0].id
+    ).toBe(eventId);
+    expect(
+      (await request(`/sos-chats/${eventId}`, 'GET', undefined, outsiderToken))
+        .status
+    ).toBe(404);
+  });
+
+  it('atomically deduplicates concurrent sends and delivers chat only to members', async () => {
+    const payload = {
+      clientMessageId: randomUUID(),
+      text: '  Tôi đang đến, bạn đang ở đâu?  ',
+    };
+    const [first, retry] = await Promise.all([
+      request(`/sos-chats/${eventId}/messages`, 'POST', payload, contactToken),
+      request(`/sos-chats/${eventId}/messages`, 'POST', payload, contactToken),
+    ]);
+    expect(first.status).toBe(201);
+    expect(retry.status).toBe(201);
+    expect(first.body.data.id).toBe(retry.body.data.id);
+    firstChatMessage = first.body.data;
+    expect(firstChatMessage.sequence).toBe(1);
+    expect(firstChatMessage.text).toBe(payload.text.trim());
+    expect(firstChatMessage.sender.userId).toBe(contact.id);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    for (const member of ['owner', 'contact']) {
+      expect(
+        received[member].filter(
+          (e) =>
+            e.name === 'sos.chat.message' &&
+            e.payload.message.id === firstChatMessage.id
+        )
+      ).toHaveLength(1);
+    }
+    expect(
+      received.outsider.filter((e) => e.name === 'sos.chat.message')
+    ).toHaveLength(0);
+    expect(
+      (
+        await request(
+          `/sos-chats/${eventId}/messages`,
+          'POST',
+          { ...payload, text: 'Changed text' },
+          contactToken
+        )
+      ).status
+    ).toBe(409);
+    for (const body of [
+      { text: ' ' },
+      { text: 'x'.repeat(2001) },
+      { text: 'x', senderId: owner.id },
+    ]) {
+      expect(
+        (
+          await request(
+            `/sos-chats/${eventId}/messages`,
+            'POST',
+            { clientMessageId: randomUUID(), ...body },
+            contactToken
+          )
+        ).status
+      ).toBe(400);
+    }
+    const pushCalls = app.get(NotificationsService).dispatchPush.mock.calls;
+    const chatPush = pushCalls.find(
+      (call) => call[1].type === 'SOS_CHAT_MESSAGE'
+    );
+    expect(chatPush[0]).toEqual([owner.id]);
+    expect(chatPush[1].message).not.toContain(firstChatMessage.text);
+  });
+
+  it('paginates and catches up with committed monotonic sequences, treating text as literal', async () => {
+    const replies = await Promise.all(
+      ['$ownerId', 'Tin thứ ba', 'Tin thứ tư'].map((text) =>
+        request(`/sos-chats/${eventId}/messages`, 'POST', {
+          clientMessageId: randomUUID(),
+          text,
+        })
+      )
+    );
+    expect(replies.every((r) => r.status === 201)).toBe(true);
+    expect(replies.map((r) => r.body.data.sequence).sort()).toEqual([2, 3, 4]);
+    expect(replies[0].body.data.text).toBe('$ownerId');
+    const latest = await request(
+      `/sos-chats/${eventId}/messages?limit=2`,
+      'GET',
+      undefined,
+      contactToken
+    );
+    expect(latest.body.data.items.map((m) => m.sequence)).toEqual([3, 4]);
+    expect(latest.body.data.nextBeforeSequence).toBe(3);
+    const older = await request(
+      `/sos-chats/${eventId}/messages?beforeSequence=3&limit=2`
+    );
+    expect(older.body.data.items.map((m) => m.sequence)).toEqual([1, 2]);
+    const catchup = await request(
+      `/sos-chats/${eventId}/messages?afterSequence=1&limit=2`
+    );
+    expect(catchup.body.data.items.map((m) => m.sequence)).toEqual([2, 3]);
+    expect(catchup.body.data.nextAfterSequence).toBe(3);
+    expect(catchup.body.data.lastSequence).toBe(4);
+    expect(
+      (
+        await request(
+          `/sos-chats/${eventId}/messages?beforeSequence=3&afterSequence=1`
+        )
+      ).status
+    ).toBe(400);
+    expect(
+      (await request(`/sos-chats/${eventId}/messages?limit=101`)).status
+    ).toBe(400);
+    expect((await request('/sos-chats/not-an-id')).status).toBe(404);
+    const genericSos = await request(`/sos/${eventId}`);
+    expect(genericSos.body.data).not.toHaveProperty('chatMessages');
+  });
+
+  it('delivers hardware GPS and recording updates to both owner and chat responders', async () => {
+    const recordedAt = new Date().toISOString();
+    expect(
+      (
+        await request(
+          `/device/sos/${eventId}/location`,
+          'PUT',
+          { latitude: 12, longitude: 108, accuracy: 3, recordedAt },
+          '',
+          hardware
+        )
+      ).status
+    ).toBe(200);
+    const upload = await request(
+      `/device/sos/${eventId}/recordings`,
+      'POST',
+      clip(randomUUID()),
+      '',
+      hardware
+    );
+    expect(upload.status).toBe(201);
+    const id = upload.body.data.id;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    for (const label of ['owner', 'contact']) {
+      expect(
+        received[label].some(
+          (e) =>
+            e.name === 'sos.location' &&
+            e.payload.location.recordedAt === recordedAt
+        )
+      ).toBe(true);
+      expect(
+        received[label].some(
+          (e) => e.name === 'sos.recording' && e.payload.recording.id === id
+        )
+      ).toBe(true);
+    }
+    expect(
+      received.outsider.some(
+        (e) => e.name === 'sos.location' || e.name === 'sos.recording'
+      )
+    ).toBe(false);
+    expect(
+      (await request(`/sos/${eventId}/recordings/${id}`, 'DELETE')).status
+    ).toBe(200);
+  });
+
+  it('revokes an accepted contact immediately for detail, incoming list, chat and playback', async () => {
     expect(
       (await request(`/sos/${eventId}/acknowledge`, 'POST', {}, contactToken))
         .status
@@ -383,6 +658,47 @@ describe('Backend contracts against isolated MongoDB', () => {
     expect(
       (await request(`/emergency-contacts/${contactId}`, 'DELETE')).status
     ).toBe(200);
+    for (const suffix of ['', '/messages']) {
+      expect(
+        (
+          await request(
+            `/sos-chats/${eventId}${suffix}`,
+            'GET',
+            undefined,
+            contactToken
+          )
+        ).status
+      ).toBe(403);
+    }
+    expect(
+      (
+        await request(
+          `/sos-chats/${eventId}/messages`,
+          'POST',
+          { clientMessageId: randomUUID(), text: 'Revoked sender' },
+          contactToken
+        )
+      ).status
+    ).toBe(403);
+    expect(
+      (await request('/sos-chats', 'GET', undefined, contactToken)).body.data
+        .items
+    ).toEqual([]);
+    const before = received.contact.filter(
+      (e) => e.name === 'sos.chat.message'
+    ).length;
+    expect(
+      (
+        await request(`/sos-chats/${eventId}/messages`, 'POST', {
+          clientMessageId: randomUUID(),
+          text: 'Owner only now',
+        })
+      ).status
+    ).toBe(201);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(
+      received.contact.filter((e) => e.name === 'sos.chat.message')
+    ).toHaveLength(before);
     expect(
       (await request(`/sos/${eventId}`, 'GET', undefined, contactToken)).status
     ).toBe(403);
@@ -434,7 +750,236 @@ describe('Backend contracts against isolated MongoDB', () => {
     expect(remaining.recordingBytes).toBe(remaining.recordings[0].sizeBytes);
   });
 
+  it('enforces per-sender limits and expiration without resetting chat sequences', async () => {
+    const event = await chatFixture();
+    const model = app.get(getModelToken('SosEvent'));
+    const seed = (count: number) =>
+      Array.from({ length: count }, (_, i) => ({
+        _id: new Types.ObjectId(),
+        senderId: owner._id,
+        clientMessageId: randomUUID(),
+        sequence: i + 1,
+        text: 'Fixture',
+        createdAt: new Date(),
+        expiresAt: new Date(Date.now() + 60000),
+      }));
+    const thirty = seed(30);
+    await model.updateOne(
+      { _id: event.id },
+      { $set: { chatMessages: thirty, chatSequence: 30 } }
+    );
+    expect(
+      (
+        await request(`/sos-chats/${event.id}/messages`, 'POST', {
+          clientMessageId: randomUUID(),
+          text: 'Too fast',
+        })
+      ).status
+    ).toBe(429);
+    expect(
+      (
+        await request(`/sos-chats/${event.id}/messages`, 'POST', {
+          clientMessageId: thirty[0].clientMessageId,
+          text: 'Fixture',
+        })
+      ).status
+    ).toBe(201);
+    await model.updateOne(
+      { _id: event.id },
+      { $set: { chatMessages: seed(1000), chatSequence: 1000 } }
+    );
+    expect(
+      (
+        await request(`/sos-chats/${event.id}/messages`, 'POST', {
+          clientMessageId: randomUUID(),
+          text: 'Full',
+        })
+      ).body.data.errorCode
+    ).toBe('SOS_CHAT_MESSAGE_LIMIT_REACHED');
+    await model.updateOne(
+      { _id: event.id },
+      { $set: { 'chatMessages.$[].expiresAt': new Date(Date.now() - 1000) } }
+    );
+    expect(
+      (await request(`/sos-chats/${event.id}/messages`)).body.data.items
+    ).toEqual([]);
+    await (app.get(SosService) as any).cleanupExpiredRecordings();
+    const newMessage = await request(
+      `/sos-chats/${event.id}/messages`,
+      'POST',
+      { clientMessageId: randomUUID(), text: 'After expiration' }
+    );
+    expect(newMessage.body.data.sequence).toBe(1001);
+  });
+
+  it('puts multiple accepted responders and the owner in the same group', async () => {
+    const links = [];
+    for (const user of [contact, outsider]) {
+      const link = await app.get(getModelToken('EmergencyContact')).create({
+        ownerId: owner._id,
+        linkedUserId: user._id,
+        invitationStatus: 'accepted',
+        name: user.fullName,
+        email: user.email,
+      });
+      links.push({
+        type: 'emergency_contact',
+        contactId: link._id,
+        userId: user._id,
+        channels: ['push'],
+      });
+    }
+    const event = await chatFixture(links);
+    for (const token of [contactToken, outsiderToken]) {
+      const accepted = await request(
+        `/sos/${event.id}/acknowledge`,
+        'POST',
+        {},
+        token
+      );
+      expect(accepted.body.data.chatId).toBe(event.id);
+    }
+    const room = await request(
+      `/sos-chats/${event.id}`,
+      'GET',
+      undefined,
+      outsiderToken
+    );
+    expect(room.body.data.memberCount).toBe(3);
+    expect(room.body.data.members.map((m) => m.userId).sort()).toEqual(
+      [owner.id, contact.id, outsider.id].sort()
+    );
+    const message = await request(
+      `/sos-chats/${event.id}/messages`,
+      'POST',
+      { clientMessageId: randomUUID(), text: 'Cùng hỗ trợ nhé' },
+      contactToken
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    for (const label of ['owner', 'contact', 'outsider']) {
+      expect(
+        received[label].some(
+          (e) =>
+            e.name === 'sos.chat.message' &&
+            e.payload.message.id === message.body.data.id
+        )
+      ).toBe(true);
+    }
+    await request(`/sos/${event.id}/resolve`, 'POST', {});
+  });
+
+  it.each(['resolve', 'cancel'])(
+    'closes the group on %s and retains owner-only history',
+    async (action) => {
+      const link = await app.get(getModelToken('EmergencyContact')).create({
+        ownerId: owner._id,
+        linkedUserId: contact._id,
+        invitationStatus: 'accepted',
+        name: 'Re-linked contact',
+        email: contact.email,
+      });
+      const event = await chatFixture([
+        {
+          type: 'emergency_contact',
+          contactId: link._id,
+          userId: contact._id,
+          acknowledgedAt: new Date(),
+          channels: ['push'],
+        },
+      ]);
+      expect(
+        (await request(`/sos-chats/${eventId}`, 'GET', undefined, contactToken))
+          .status
+      ).toBe(403);
+      const message = await request(
+        `/sos-chats/${event.id}/messages`,
+        'POST',
+        { clientMessageId: randomUUID(), text: 'Help is here' },
+        contactToken
+      );
+      expect(message.status).toBe(201);
+      expect(
+        (await request(`/sos/${event.id}/${action}`, 'POST', {})).status
+      ).toBe(201);
+      const room = await request(`/sos-chats/${event.id}`);
+      expect(room.body.data.status).toBe('closed');
+      expect(room.body.data.canSend).toBe(false);
+      expect(
+        (await request(`/sos-chats/${event.id}/messages`)).body.data.items
+      ).toHaveLength(1);
+      expect(
+        (
+          await request(
+            `/sos-chats/${event.id}/messages`,
+            'GET',
+            undefined,
+            contactToken
+          )
+        ).status
+      ).toBe(403);
+      expect(
+        (
+          await request(`/sos-chats/${event.id}/messages`, 'POST', {
+            clientMessageId: randomUUID(),
+            text: 'Too late',
+          })
+        ).status
+      ).toBe(409);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(
+        received.contact.some(
+          (e) => e.name === 'sos.chat.closed' && e.payload.chatId === event.id
+        )
+      ).toBe(true);
+      expect(
+        (await request('/sos-chats?status=closed')).body.data.items.some(
+          (r) => r.id === event.id
+        )
+      ).toBe(true);
+      expect(
+        (
+          await request(
+            '/sos-chats?status=closed',
+            'GET',
+            undefined,
+            contactToken
+          )
+        ).body.data.items
+      ).toEqual([]);
+    }
+  );
+
   it('queues account deletion, revokes mobile and hardware access, then removes all owned data', async () => {
+    const foreign = await chatFixture();
+    await app.get(getModelToken('SosEvent')).updateOne(
+      { _id: foreign.id },
+      {
+        $set: {
+          ownerId: outsider._id,
+          chatMessages: [
+            {
+              _id: new Types.ObjectId(),
+              senderId: owner._id,
+              clientMessageId: randomUUID(),
+              sequence: 1,
+              text: 'Delete my text',
+              createdAt: new Date(),
+              expiresAt: new Date(Date.now() + 60000),
+            },
+            {
+              _id: new Types.ObjectId(),
+              senderId: outsider._id,
+              clientMessageId: randomUUID(),
+              sequence: 2,
+              text: 'Keep other text',
+              createdAt: new Date(),
+              expiresAt: new Date(Date.now() + 60000),
+            },
+          ],
+          chatSequence: 2,
+        },
+      }
+    );
     const sos = app.get(SosService);
     const originalDelete = sos.deleteOwnedData.bind(sos);
     const deleteSpy = jest
@@ -466,5 +1011,12 @@ describe('Backend contracts against isolated MongoDB', () => {
         .countDocuments({ ownerId: owner._id })
     ).toBe(0);
     expect(await readdir(directory)).toEqual([]);
+    const foreignAfter = await app
+      .get(getModelToken('SosEvent'))
+      .findById(foreign.id)
+      .select('+chatMessages');
+    expect(foreignAfter.chatMessages.map((m) => m.text)).toEqual([
+      'Keep other text',
+    ]);
   });
 });
