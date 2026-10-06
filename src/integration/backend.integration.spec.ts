@@ -6,9 +6,17 @@ import { mkdir, mkdtemp, readdir, rename, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { createServer } from 'node:net';
 import { Types } from 'mongoose';
 import { io, Socket } from 'socket.io-client';
 import { AuthService } from '../modules/auth/auth.service';
+import { UsersService } from '../modules/users/users.service';
+import { PasswordService } from '../modules/auth/password.service';
+import { CommerceService } from '../modules/commerce/commerce.service';
+import { PayOS } from '@payos/node';
 import { EmailService } from '../modules/auth/email.service';
 import { NotificationsService } from '../modules/notifications/notifications.service';
 import { FirebaseService } from '../modules/notifications/firebase.service';
@@ -154,6 +162,11 @@ describe('Backend contracts against isolated MongoDB', () => {
       FIREBASE_CLIENT_EMAIL: '',
       FIREBASE_PRIVATE_KEY: '',
       SOS_RECORDINGS_DIR: directory,
+      HEROS_CHECKOUT_ENABLED: 'true',
+      HEROS_SITE_URL: 'http://127.0.0.1:3000',
+      PAYOS_CLIENT_ID: '',
+      PAYOS_API_KEY: '',
+      PAYOS_CHECKSUM_KEY: '',
     });
     const { AppModule } = await import('../app.module');
     const module = await Test.createTestingModule({ imports: [AppModule] })
@@ -221,6 +234,415 @@ describe('Backend contracts against isolated MongoDB', () => {
     if (mongo) await mongo.stop();
     if (directory) await rm(directory, { recursive: true, force: true });
     process.env = previousEnv;
+  });
+
+  it('creates a web buyer who can login on mobile with the same password and pair one hardware device', async () => {
+    const email = 'buyer@test.invalid';
+    await request(
+      '/auth/email/request-otp',
+      'POST',
+      { email, purpose: 'register' },
+      ''
+    );
+    const otp = sendOtp.mock.calls.find((call) => call[0] === email)[1];
+    const registered = await request(
+      '/auth/web/register',
+      'POST',
+      {
+        email,
+        otp,
+        fullName: 'Web buyer',
+        password: 'Buyer@Test123',
+        deviceId: 'web-browser-123',
+      },
+      ''
+    );
+    expect(registered.status).toBe(201);
+    const web = registered.body.data.accessToken;
+    const auth = app.get(AuthService);
+    const mobile = await auth.passwordLogin(
+      email,
+      'Buyer@Test123',
+      'buyer-phone'
+    );
+    const { JwtService } = await import('@nestjs/jwt');
+    const jwt = app.get(JwtService);
+    expect(jwt.decode(web)).not.toHaveProperty('exp');
+    expect(jwt.decode(mobile.accessToken)).not.toHaveProperty('exp');
+    expect(
+      await jwt.verifyAsync(web, {
+        clockTimestamp: Math.floor(Date.now() / 1000) + 10 * 365 * 86400,
+      })
+    ).toHaveProperty('sub', mobile.user._id.toString());
+    expect((await request('/me', 'GET', undefined, web)).status).toBe(200);
+    expect(
+      (await request('/me', 'GET', undefined, mobile.accessToken)).status
+    ).toBe(200);
+    const paired = await request(
+      '/me/heros-devices',
+      'POST',
+      { hardwareId: 'BUYER-HARDWARE' },
+      mobile.accessToken
+    );
+    expect(paired.status).toBe(201);
+    expect(
+      (
+        await request(
+          '/me/heros-devices',
+          'POST',
+          { hardwareId: 'BUYER-SECOND-HARDWARE' },
+          mobile.accessToken
+        )
+      ).status
+    ).toBe(409);
+    expect(
+      (
+        await request('/me/heros-devices', 'POST', {
+          hardwareId: 'BUYER-HARDWARE',
+        })
+      ).status
+    ).toBe(409);
+    const input = {
+      name: 'Buyer',
+      email,
+      phone: '0900000000',
+      address: 'Test delivery address',
+      quantity: 2,
+      method: 'cod',
+      requestId: randomUUID(),
+    };
+    const created = await request('/commerce/orders', 'POST', input, web);
+    expect(created.status).toBe(201);
+    const code = created.body.data.order.orderCode;
+    expect(created.body.data.order.amount).toBe(1180000);
+    expect(created.body.data.order.status).toBe('COD_CONFIRMED');
+    expect(
+      (await request('/commerce/orders', 'POST', input, web)).body.data.created
+    ).toBe(false);
+    expect(
+      (
+        await request(
+          '/commerce/orders',
+          'POST',
+          { ...input, quantity: 3 },
+          web
+        )
+      ).status
+    ).toBe(409);
+    expect(
+      (
+        await request(
+          `/commerce/orders/${code}`,
+          'GET',
+          undefined,
+          mobile.accessToken
+        )
+      ).body.data.order.customer.address
+    ).toBe(input.address);
+    expect((await request(`/commerce/orders/${code}`)).status).toBe(404);
+    expect(
+      (
+        await request(`/commerce/guest-orders/${code}`, 'GET', undefined, '', {
+          'X-Heros-Order-Token': created.body.data.guestToken,
+        })
+      ).status
+    ).toBe(404);
+    expect(
+      (await request('/commerce/orders', 'GET', undefined, web)).body.data
+        .orders
+    ).toHaveLength(1);
+    expect(
+      (await request('/auth/logout-current', 'POST', undefined, web)).status
+    ).toBe(200);
+    expect((await request('/me', 'GET', undefined, web)).status).toBe(401);
+    expect(
+      (await request('/me', 'GET', undefined, mobile.accessToken)).status
+    ).toBe(200);
+    const webAgain = await auth.passwordLogin(
+      email,
+      'Buyer@Test123',
+      'web-browser-123',
+      'web'
+    );
+    await app
+      .get(UsersService)
+      .setPassword(
+        mobile.user._id.toString(),
+        await app.get(PasswordService).hash('Changed@Test123')
+      );
+    expect(
+      (await request('/me', 'GET', undefined, mobile.accessToken)).status
+    ).toBe(401);
+    expect(
+      (await request('/me', 'GET', undefined, webAgain.accessToken)).status
+    ).toBe(401);
+  });
+
+  const webDirectory = join(process.cwd(), '..', 'heros-web');
+  const nextCli = join(webDirectory, 'node_modules/next/dist/bin/next');
+  (existsSync(nextCli) && existsSync(join(webDirectory, '.next/BUILD_ID'))
+    ? it
+    : it.skip)(
+    'integrates the actual Next website cookies/OTP/checkout with the same isolated backend user',
+    async () => {
+      const portFinder = createServer();
+      await new Promise<void>((resolve) =>
+        portFinder.listen(0, '127.0.0.1', resolve)
+      );
+      const port = (portFinder.address() as { port: number }).port;
+      await new Promise<void>((resolve) => portFinder.close(() => resolve()));
+      const webUrl = `http://127.0.0.1:${port}`;
+      const web = spawn(
+        process.execPath,
+        [nextCli, 'start', '--hostname', '127.0.0.1', '--port', String(port)],
+        {
+          cwd: webDirectory,
+          env: {
+            ...process.env,
+            HEROS_API_URL: `${base}/`,
+            HEROS_SITE_URL: webUrl,
+            HEROS_CHECKOUT_ENABLED: 'true',
+            HEROS_DB_PATH: join(directory, 'unused-web.sqlite'),
+          },
+          stdio: 'ignore',
+        }
+      );
+      const cookieJar = new Map<string, string>();
+      const browserCookies = () =>
+        [...cookieJar].map(([key, value]) => `${key}=${value}`).join('; ');
+      async function webRequest(path: string, body?: unknown) {
+        const response = await fetch(`${webUrl}${path}`, {
+          method: body ? 'POST' : 'GET',
+          headers: {
+            Origin: webUrl,
+            Cookie: browserCookies(),
+            ...(body ? { 'Content-Type': 'application/json' } : {}),
+          },
+          body: body ? JSON.stringify(body) : undefined,
+        });
+        const updated = response.headers.getSetCookie();
+        for (const item of updated) {
+          const pair = item.split(';')[0];
+          const separator = pair.indexOf('=');
+          const key = pair.slice(0, separator),
+            value = pair.slice(separator + 1);
+          if (value) cookieJar.set(key, value);
+          else cookieJar.delete(key);
+        }
+        return { response, data: await response.json() };
+      }
+      try {
+        let ready = false;
+        for (let attempt = 0; attempt < 50; attempt++) {
+          try {
+            ready = (await fetch(`${webUrl}/api/health`)).ok;
+          } catch {}
+          if (ready) break;
+          if (web.exitCode !== null) throw new Error('Next test server exited');
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+        expect(ready).toBe(true);
+        const email = 'next-buyer@test.invalid';
+        expect(
+          (
+            await webRequest('/api/account', {
+              action: 'request-otp',
+              email,
+              purpose: 'register',
+            })
+          ).response.status
+        ).toBe(200);
+        const otp = sendOtp.mock.calls.find((call) => call[0] === email)[1];
+        const register = await webRequest('/api/account', {
+          action: 'register',
+          email,
+          otp,
+          name: 'Next buyer',
+          password: 'Next@Test123',
+        });
+        expect(register.response.status).toBe(201);
+        expect(register.data).not.toHaveProperty('accessToken');
+        expect(browserCookies()).toContain('heros_session=');
+        expect(register.response.headers.getSetCookie().join(';')).toContain(
+          'HttpOnly'
+        );
+        const mobile = await app
+          .get(AuthService)
+          .passwordLogin(email, 'Next@Test123', 'next-buyer-phone');
+        expect(register.data.account.id).toBe(mobile.user._id.toString());
+        expect((await webRequest('/api/account')).data.account.id).toBe(
+          register.data.account.id
+        );
+        const created = await webRequest('/api/orders', {
+          name: 'Next buyer',
+          email,
+          phone: '0900000000',
+          address: 'Test delivery address',
+          quantity: 1,
+          method: 'cod',
+          requestId: randomUUID(),
+        });
+        expect(created.response.status).toBe(201);
+        const code = created.data.order.orderCode;
+        expect(
+          (await webRequest(`/api/orders/${code}`)).data.order.status
+        ).toBe('COD_CONFIRMED');
+        expect(
+          (
+            await request(
+              `/commerce/orders/${code}`,
+              'GET',
+              undefined,
+              mobile.accessToken
+            )
+          ).status
+        ).toBe(200);
+        expect(
+          (await webRequest('/api/account', { action: 'logout' })).response
+            .status
+        ).toBe(200);
+        expect(
+          (await request('/me', 'GET', undefined, mobile.accessToken)).status
+        ).toBe(200);
+        expect((await webRequest(`/api/orders/${code}`)).response.status).toBe(
+          404
+        );
+      } finally {
+        if (web.exitCode === null) {
+          const exited = once(web, 'exit');
+          web.kill('SIGTERM');
+          await exited;
+        }
+      }
+    }
+  );
+
+  it('uses server prices, verifies payOS webhooks, reconciles funds and never regresses PAID or marks COD paid', async () => {
+    const commerce = app.get(CommerceService);
+    const client = new PayOS({
+      clientId: 'test',
+      apiKey: 'test',
+      checksumKey: 'test-checksum',
+      logLevel: 'off',
+    });
+    const paymentCreate = jest
+      .spyOn(client.paymentRequests, 'create')
+      .mockImplementation(
+        async (input: any) =>
+          ({
+            orderCode: input.orderCode,
+            amount: input.amount,
+            currency: 'VND',
+            paymentLinkId: 'test-link',
+            checkoutUrl: 'https://pay.payos.vn/web/test-link',
+          }) as any
+      );
+    const paymentGet = jest.spyOn(client.paymentRequests, 'get');
+    const provider = jest
+      .spyOn(commerce as any, 'payos')
+      .mockReturnValue(client);
+    try {
+      const input = {
+        name: 'Owner',
+        email: owner.email,
+        phone: '0900000000',
+        address: 'Test delivery address',
+        quantity: 2,
+        method: 'payos',
+        requestId: randomUUID(),
+      };
+      expect(
+        (await request('/commerce/orders', 'POST', { ...input, amount: 1 }))
+          .status
+      ).toBe(400);
+      const created = await request('/commerce/orders', 'POST', input);
+      const order = created.body.data.order;
+      expect(order.amount).toBe(1180000);
+      expect(order.status).toBe('PENDING');
+      await request('/commerce/orders', 'POST', input);
+      expect(paymentCreate).toHaveBeenCalledTimes(1);
+      const state = {
+        orderCode: order.orderCode,
+        amount: order.amount,
+        id: 'test-link',
+        status: 'PAID',
+        amountPaid: order.amount - 1,
+      };
+      paymentGet.mockResolvedValue(state as any);
+      expect(
+        (await request(`/commerce/orders/${order.orderCode}`)).body.data
+          .syncPending
+      ).toBe(true);
+      expect(
+        (
+          await app
+            .get(getModelToken('CommerceOrder'))
+            .findOne({ orderCode: order.orderCode })
+        ).status
+      ).toBe('PENDING');
+      state.amountPaid = order.amount;
+      const data = {
+        orderCode: order.orderCode,
+        amount: order.amount,
+        description: 'test',
+        accountNumber: 'test',
+        reference: 'test',
+        transactionDateTime: '2026-10-06 10:00:00',
+        currency: 'VND',
+        paymentLinkId: 'test-link',
+        code: '00',
+        desc: 'success',
+        counterAccountBankId: '',
+        counterAccountBankName: '',
+        counterAccountName: '',
+        counterAccountNumber: '',
+        virtualAccountName: '',
+        virtualAccountNumber: '',
+      };
+      const signature = await client.crypto.createSignatureFromObj(
+        data,
+        client.checksumKey
+      );
+      const signed = {
+        code: '00',
+        desc: 'success',
+        success: true,
+        data,
+        signature,
+      };
+      expect(
+        (
+          await request(
+            '/commerce/payos/webhook',
+            'POST',
+            { ...signed, data: { ...data, amount: 1 } },
+            ''
+          )
+        ).status
+      ).toBe(409);
+      expect(
+        (await request('/commerce/payos/webhook', 'POST', signed, '')).status
+      ).toBe(201);
+      await commerce.setStatus(order.orderCode, 'CANCELLED');
+      expect(
+        (await request(`/commerce/orders/${order.orderCode}`)).body.data.order
+          .status
+      ).toBe('PAID');
+      const cod = await request('/commerce/orders', 'POST', {
+        ...input,
+        requestId: randomUUID(),
+        method: 'cod',
+      });
+      await commerce.setStatus(cod.body.data.order.orderCode, 'PAID');
+      expect(
+        (await request(`/commerce/orders/${cod.body.data.order.orderCode}`))
+          .body.data.order.status
+      ).toBe('COD_CONFIRMED');
+    } finally {
+      provider.mockRestore();
+      paymentCreate.mockRestore();
+      paymentGet.mockRestore();
+    }
   });
 
   it('revokes old HTTP tokens and excludes old push registrations', async () => {

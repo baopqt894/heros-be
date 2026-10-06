@@ -23,6 +23,7 @@ import { UserDocument } from '../users/schemas/user.schema';
 import { UserType } from '../users/user-type';
 import { EmailService } from './email.service';
 import { RegisterUserDto } from './dto/register-user.dto';
+import { WebRegisterDto } from './dto/web-register.dto';
 import { PasswordService } from './password.service';
 import { EmailOtp, EmailOtpDocument } from './schemas/email-otp.schema';
 import {
@@ -113,6 +114,10 @@ export class AuthService {
     if (!user) throw new UnauthorizedException({ code: 'USER_NOT_FOUND' });
     if (user.status !== 'active')
       throw new UnauthorizedException('Account is unavailable');
+    if (!user.emailVerifiedAt) {
+      user.emailVerifiedAt = new Date();
+      await user.save();
+    }
     return this.createSession(user, deviceId);
   }
 
@@ -150,7 +155,12 @@ export class AuthService {
     return this.createSession(user, dto.deviceId);
   }
 
-  async passwordLogin(email: string, password: string, deviceId: string) {
+  async passwordLogin(
+    email: string,
+    password: string,
+    deviceId: string,
+    clientType: 'mobile' | 'web' = 'mobile'
+  ) {
     const user = await this.usersService.findByEmailWithPassword(email);
     const isValid = await this.passwordService.verify(
       password,
@@ -159,14 +169,43 @@ export class AuthService {
     if (!user || !isValid || user.status !== 'active') {
       throw new UnauthorizedException({ code: 'INVALID_CREDENTIALS' });
     }
-    return this.createSession(user, deviceId);
+    return this.createSession(user, deviceId, undefined, clientType);
+  }
+
+  async registerWeb(dto: WebRegisterDto) {
+    const email = this.usersService.normalizeEmail(dto.email);
+    if (await this.usersService.findByEmail(email))
+      throw new ConflictException({ code: 'EMAIL_ALREADY_REGISTERED' });
+    await this.consumeOtp(email, dto.otp, 'register');
+    try {
+      const user = await this.usersService.createEmailUser(email, {
+        fullName: dto.fullName,
+        passwordHash: await this.passwordService.hash(dto.password),
+        userType: 'device_owner',
+      });
+      return this.createSession(user, dto.deviceId, undefined, 'web');
+    } catch (error) {
+      if (error?.code === 11000)
+        throw new ConflictException({ code: 'EMAIL_ALREADY_REGISTERED' });
+      throw error;
+    }
+  }
+
+  async logoutCurrent(userId: string, sessionKey: string) {
+    await this.usersService.revokeSession(userId, sessionKey);
+    await this.sessionModel.updateMany(
+      { userId, sessionKey },
+      { $set: { revokedAt: new Date() } }
+    );
+    return { loggedOut: true };
   }
 
   async resetPassword(
     rawEmail: string,
     otp: string,
     newPassword: string,
-    deviceId: string
+    deviceId: string,
+    clientType: 'mobile' | 'web' = 'mobile'
   ) {
     const email = this.usersService.normalizeEmail(rawEmail);
     await this.consumeOtp(email, otp, 'login');
@@ -174,12 +213,16 @@ export class AuthService {
     if (!user || user.status !== 'active') {
       throw new UnauthorizedException({ code: 'USER_NOT_FOUND' });
     }
+    if (!user.emailVerifiedAt) {
+      user.emailVerifiedAt = new Date();
+      await user.save();
+    }
     const passwordHash = await this.passwordService.hash(newPassword);
     const updatedUser = await this.usersService.setPassword(
       user._id.toString(),
       passwordHash
     );
-    return this.createSession(updatedUser, deviceId);
+    return this.createSession(updatedUser, deviceId, undefined, clientType);
   }
 
   private async consumeOtp(
@@ -295,7 +338,12 @@ export class AuthService {
     if (!consumed.modifiedCount) throw this.invalidRefresh();
     const user = await this.usersService.findById(session.userId.toString());
     if (!user || user.status !== 'active') throw this.invalidRefresh();
-    return this.createSession(user, session.deviceId, session.sessionKey);
+    return this.createSession(
+      user,
+      session.deviceId,
+      session.sessionKey,
+      session.clientType || 'mobile'
+    );
   }
 
   async logout(rawToken: string) {
@@ -307,7 +355,6 @@ export class AuthService {
       if (
         session &&
         !session.revokedAt &&
-        session.expiresAt > new Date() &&
         this.safeEqual(session.tokenHash, this.hashToken(secret))
       ) {
         await this.sessionModel.updateOne(
@@ -326,13 +373,18 @@ export class AuthService {
   async createSession(
     user: UserDocument,
     deviceId: string,
-    existingKey?: string
+    existingKey?: string,
+    clientType: 'mobile' | 'web' = 'mobile'
   ) {
     const sessionKey = existingKey || randomBytes(32).toString('hex');
     if (existingKey)
       await this.usersService.assertSession(user._id.toString(), sessionKey);
     else
-      await this.usersService.activateSession(user._id.toString(), sessionKey);
+      await this.usersService.activateSession(
+        user._id.toString(),
+        sessionKey,
+        clientType
+      );
     const secret = randomBytes(32).toString('base64url');
     const expiresAt = new Date(Date.now() + this.refreshTtlDays * 86_400_000);
     const session = await this.sessionModel.create({
@@ -340,6 +392,7 @@ export class AuthService {
       tokenHash: this.hashToken(secret),
       deviceId,
       sessionKey,
+      clientType,
       expiresAt,
     });
     const accessToken = await this.jwtService.signAsync({
@@ -348,13 +401,16 @@ export class AuthService {
       type: 'access',
       sessionKey,
       deviceId,
+      clientType,
     });
     const safeUser = user.toObject();
     delete (safeUser as { passwordHash?: string }).passwordHash;
     delete safeUser.activeSessionKey;
+    delete safeUser.webSessionKey;
     delete safeUser.avatarData;
     return {
       accessToken,
+      accessExpiresAt: null,
       refreshToken: `${session._id.toString()}.${secret}`,
       refreshExpiresAt: expiresAt,
       user: safeUser,

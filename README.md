@@ -1,5 +1,8 @@
 # Heros SOS Backend
 
+Shared website/mobile accounts, permanent access JWTs, commerce migration and
+socket updates: [Unified account integration guide (Vietnamese)](docs/UNIFIED_ACCOUNT_WEB_DEVICE_VI.md).
+
 NestJS + MongoDB backend for the Heros Swift application. It provides email and
 password login, email OTP, Google Sign-In, JWT sessions, user profiles, emergency
 contacts, FCM devices, last-known location, SOS creation, acknowledgement and

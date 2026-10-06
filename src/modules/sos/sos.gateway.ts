@@ -14,6 +14,10 @@ import { UsersService } from '../users/users.service';
 @WebSocketGateway({
   namespace: '/sos',
   cors: { origin: true, credentials: true },
+  perMessageDeflate: false,
+  httpCompression: false,
+  pingInterval: 20000,
+  pingTimeout: 20000,
 })
 export class SosGateway implements OnGatewayConnection {
   @WebSocketServer()
@@ -43,16 +47,27 @@ export class SosGateway implements OnGatewayConnection {
   async notifyUser(userId: string, event: string, payload: unknown) {
     if (!this.server) return;
     const sockets = await this.server.in(`user:${userId}`).fetchSockets();
-    for (const socket of sockets) {
-      try {
-        const user = socket.data.user as AuthenticatedUser;
-        if (!user?.exp || user.exp * 1000 <= Date.now())
-          throw new Error('Expired');
-        await this.users.assertSession(userId, user.sessionKey);
-        socket.emit(event, payload);
-      } catch {
-        socket.disconnect(true);
-      }
-    }
+    const checks = new Map<string, Promise<void>>();
+    await Promise.all(
+      sockets.map(async (socket) => {
+        try {
+          const user = socket.data.user as AuthenticatedUser;
+          if (
+            !user?.sessionKey ||
+            (user.exp !== undefined && user.exp * 1000 <= Date.now())
+          )
+            throw new Error('Expired');
+          let check = checks.get(user.sessionKey);
+          if (!check) {
+            check = this.users.assertSession(userId, user.sessionKey);
+            checks.set(user.sessionKey, check);
+          }
+          await check;
+          socket.emit(event, payload);
+        } catch {
+          socket.disconnect(true);
+        }
+      })
+    );
   }
 }

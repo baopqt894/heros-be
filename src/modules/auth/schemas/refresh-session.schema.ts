@@ -22,6 +22,9 @@ export class RefreshSession {
   @Prop({ required: true })
   sessionKey: string;
 
+  @Prop({ enum: ['mobile', 'web'], default: 'mobile' })
+  clientType: 'mobile' | 'web';
+
   @Prop({ required: true })
   expiresAt: Date;
 

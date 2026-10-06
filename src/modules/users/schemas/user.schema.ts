@@ -26,8 +26,8 @@ export class User {
   @Prop({ lowercase: true, required: true, trim: true, unique: true })
   email: string;
 
-  @Prop({ required: true })
-  emailVerifiedAt: Date;
+  @Prop()
+  emailVerifiedAt?: Date;
 
   @Prop({ index: true, sparse: true, unique: true })
   googleSubject?: string;
@@ -37,6 +37,12 @@ export class User {
 
   @Prop({ select: false })
   activeSessionKey?: string;
+
+  @Prop({ select: false })
+  webSessionKey?: string;
+
+  @Prop({ sparse: true, unique: true })
+  legacyWebAccountId?: string;
 
   @Prop()
   phoneVerifiedAt?: Date;

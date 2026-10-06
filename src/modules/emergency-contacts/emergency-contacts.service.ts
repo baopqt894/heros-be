@@ -53,6 +53,42 @@ export class EmergencyContactsService {
     return Boolean(await this.contactModel.exists({ _id: contactId, ownerId }));
   }
 
+  async filterSosRecipients<
+    T extends { contactId?: Types.ObjectId; userId?: Types.ObjectId },
+  >(ownerId: string, recipients: T[]): Promise<T[]> {
+    const [contacts, active] = await Promise.all([
+      this.contactModel
+        .find({ ownerId })
+        .select('_id linkedUserId invitationStatus')
+        .lean(),
+      this.usersService.activeIds([
+        ownerId,
+        ...recipients.flatMap((r) => (r.userId ? [r.userId.toString()] : [])),
+      ]),
+    ]);
+    if (!active.has(ownerId)) return [];
+    return recipients.filter((recipient) => {
+      const contact = recipient.contactId
+        ? contacts.find(
+            (c) => c._id.toString() === recipient.contactId.toString()
+          )
+        : undefined;
+      if (recipient.contactId && !contact) return false;
+      if (!recipient.userId) return true;
+      const userId = recipient.userId.toString();
+      return (
+        active.has(userId) &&
+        contacts.some(
+          (c) =>
+            (!recipient.contactId ||
+              c._id.toString() === recipient.contactId.toString()) &&
+            c.linkedUserId?.toString() === userId &&
+            c.invitationStatus === 'accepted'
+        )
+      );
+    });
+  }
+
   async create(ownerId: string, dto: CreateEmergencyContactDto) {
     const owner = await this.usersService.getMe(ownerId);
     if (owner.userType !== 'device_owner') {

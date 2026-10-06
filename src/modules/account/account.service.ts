@@ -189,7 +189,7 @@ export class AccountService implements OnModuleInit, OnModuleDestroy {
       { _id: userId, status: 'active' },
       {
         $set: { status: 'deleting', deletionRequestedAt: new Date() },
-        $unset: { activeSessionKey: 1 },
+        $unset: { activeSessionKey: 1, webSessionKey: 1 },
       }
     );
     if (!result.modifiedCount) throw new NotFoundException('User not found');
@@ -219,6 +219,9 @@ export class AccountService implements OnModuleInit, OnModuleDestroy {
           await this.connection
             .collection('refresh_sessions')
             .deleteMany({ userId: id });
+          await this.connection
+            .collection('commerce_orders')
+            .deleteMany({ accountId: id });
           await this.connection
             .collection('email_otp_challenges')
             .deleteMany({ email: user.email });

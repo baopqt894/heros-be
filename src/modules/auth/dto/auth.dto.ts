@@ -55,6 +55,11 @@ export class GoogleLoginDto {
 }
 
 export class PasswordLoginDto {
+  @ApiPropertyOptional({ enum: ['mobile', 'web'], default: 'mobile' })
+  @IsOptional()
+  @IsIn(['mobile', 'web'])
+  clientType?: 'mobile' | 'web';
+
   @ApiProperty({ example: 'user@example.com' })
   @IsEmail()
   email: string;
@@ -73,6 +78,11 @@ export class PasswordLoginDto {
 }
 
 export class ResetPasswordDto {
+  @ApiPropertyOptional({ enum: ['mobile', 'web'], default: 'mobile' })
+  @IsOptional()
+  @IsIn(['mobile', 'web'])
+  clientType?: 'mobile' | 'web';
+
   @ApiProperty({ example: 'user@example.com' })
   @IsEmail()
   email: string;

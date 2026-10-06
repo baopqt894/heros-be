@@ -4,6 +4,7 @@ export interface AuthenticatedUser {
   type: 'access';
   sessionKey: string;
   deviceId: string;
+  clientType?: 'mobile' | 'web';
   iat?: number;
   exp?: number;
 }

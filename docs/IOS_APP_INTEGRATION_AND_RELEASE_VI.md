@@ -79,7 +79,7 @@ POST có thể trả 201; client chấp nhận mọi HTTP 2xx phù hợp. Lỗi:
 
 `data.details` có thể là mảng validation hoặc object như `retryAfterSeconds`. Gửi JSON đúng tên field vì backend từ chối field thừa. Ngày giờ UTC ISO8601; ID dùng String. Mongo model có `_id`, SOS mobile response có `id`; đừng dùng một model chung mặc định cho mọi API.
 
-Gửi `Authorization: Bearer <accessToken>` cho route được bảo vệ. Lưu token trong Keychain, không log token/OTP/mã lời mời/GPS/audio. Refresh token quay vòng: serialize refresh bằng actor/single-flight; thay cả hai token sau refresh. Gặp 401 thử refresh một lần; thất bại thì đăng nhập lại. Mã HTTP 429 phải backoff theo thời gian trả về.
+Gửi `Authorization: Bearer <accessToken>` cho route được bảo vệ. Lưu token trong Keychain, không log token/OTP/mã lời mời/GPS/audio. Cập nhật 06/10/2026: access JWT mới không có `exp`, không cần refresh định kỳ; session vẫn bị thu hồi. Logout dùng `POST /auth/logout-current` với Bearer để hoạt động cả sau khi refresh hết hạn. Gặp `SESSION_REVOKED` thì đăng nhập lại. Refresh token legacy vẫn quay vòng; serialize refresh bằng actor/single-flight. Mã HTTP 429 phải backoff theo thời gian trả về. Luồng tài khoản mua hàng web dùng chung với app và ghép thiết bị: [UNIFIED_ACCOUNT_WEB_DEVICE_VI.md](UNIFIED_ACCOUNT_WEB_DEVICE_VI.md).
 
 ## 5. Đăng ký, đăng nhập và hồ sơ
 
@@ -114,7 +114,7 @@ Password tùy chọn nhưng nếu gửi phải dài 8–128 ký tự; `gender` t
 | `GET /me`                      | Hồ sơ hiện tại                                                             |
 | `PATCH /me`                    | `fullName`, `dateOfBirth`, `gender`, `phone`; không gửi userType/avatarUrl |
 
-Response login/register chứa `accessToken`, `refreshToken`, `refreshExpiresAt`, `user`. Tạo installation UUID một lần cho app, giữ ổn định giữa các lần gọi; không dùng serial hardware thay `deviceId`.
+Response login/register chứa `accessToken`, `accessExpiresAt: null`, `refreshToken`, `refreshExpiresAt`, `user`. Tạo installation UUID một lần cho app, giữ ổn định giữa các lần gọi; không dùng serial hardware thay `deviceId`. Login app có thể bỏ `clientType` (mặc định mobile); phiên web tồn tại cùng phiên mobile.
 
 Hai account test đã seed ở database cấu hình trong phiên trước: `owner@heros.vn`, `contact@heros.vn`, password `123456`; mock OTP `123456` chỉ áp dụng hai email này. Không dùng mock cho đăng ký user thật. Seed có thể chạy lại bằng `npm run seed:demo` nhưng sẽ reset thông tin demo; chỉ chạy trên môi trường xác định. Code hiện bật mock trừ khi `DEMO_AUTH_ENABLED=false`: public production nên tắt và đổi mật khẩu demo, tách reviewer account khỏi dữ liệu thật.
 

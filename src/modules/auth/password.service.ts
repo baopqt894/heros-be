@@ -14,6 +14,23 @@ export class PasswordService {
 
   async verify(password: string, encodedHash?: string) {
     if (!encodedHash) return false;
+    if (/^[a-f0-9]{32}:[a-f0-9]{128}$/.test(encodedHash)) {
+      const [salt, key] = encodedHash.split(':');
+      try {
+        const actual = await new Promise<Buffer>((resolve, reject) =>
+          scrypt(
+            password,
+            salt,
+            KEY_LENGTH,
+            { N: 131072, r: 8, p: 1, maxmem: 160 * 1024 * 1024 },
+            (error, result) => (error ? reject(error) : resolve(result))
+          )
+        );
+        return timingSafeEqual(actual, Buffer.from(key, 'hex'));
+      } catch {
+        return false;
+      }
+    }
     const [prefix, encodedSalt, encodedKey, ...extra] = encodedHash.split(':');
     if (prefix !== HASH_PREFIX || !encodedSalt || !encodedKey || extra.length) {
       return false;

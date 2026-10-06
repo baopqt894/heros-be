@@ -13,6 +13,7 @@ import { SosModule } from './modules/sos/sos.module';
 import { HealthController } from './modules/health/health.controller';
 import { HardwareDevicesModule } from './modules/hardware-devices/hardware-devices.module';
 import { AccountModule } from './modules/account/account.module';
+import { CommerceModule } from './modules/commerce/commerce.module';
 
 @Module({
   imports: [
@@ -59,9 +60,8 @@ import { AccountModule } from './modules/account/account.module';
         if (!secret) throw new Error('JWT_ACCESS_SECRET is required');
         return {
           secret,
-          signOptions: {
-            expiresIn: (config.get<string>('JWT_ACCESS_TTL') || '15m') as any,
-          },
+          // Access remains valid until its server-side session is revoked.
+          signOptions: {},
         };
       },
     }),
@@ -72,6 +72,7 @@ import { AccountModule } from './modules/account/account.module';
     HardwareDevicesModule,
     SosModule,
     AccountModule,
+    CommerceModule,
   ],
   controllers: [HealthController],
   providers: [

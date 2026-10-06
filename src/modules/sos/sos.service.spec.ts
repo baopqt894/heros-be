@@ -40,7 +40,9 @@ describe('SosService response privacy', () => {
     return new SosService(
       model as any,
       {} as any,
-      { isAccepted: jest.fn().mockResolvedValue(true) } as any,
+      {
+        filterSosRecipients: jest.fn(async (_owner, recipients) => recipients),
+      } as any,
       {} as any,
       {} as any,
       { get: jest.fn().mockReturnValue(undefined) } as any

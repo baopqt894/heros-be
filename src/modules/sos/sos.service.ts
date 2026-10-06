@@ -201,19 +201,25 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
         .filter((contact) => contact.emailEnabled && contact.email)
         .map((contact) => contact.email),
     });
-    for (const recipientId of seenUsers) {
-      if (!(await this.contactsService.isAccepted(ownerId, recipientId)))
-        continue;
-      await this.gateway.notifyUser(recipientId, 'sos.created', {
-        id: event._id,
-        code: event.code,
-        ownerName: owner.fullName || 'Một người dùng',
-        ownerAvatarUrl: owner.avatarUrl,
-        currentLocation: location,
-        startedAt: event.startedAt,
-        message: event.message,
-      });
-    }
+    await this.filterRecipients(event);
+    const currentRecipients = new Set(
+      event.recipients.map((recipient) => recipient.userId?.toString())
+    );
+    await Promise.all(
+      [...seenUsers]
+        .filter((recipientId) => currentRecipients.has(recipientId))
+        .map(async (recipientId) => {
+          await this.gateway.notifyUser(recipientId, 'sos.created', {
+            id: event._id,
+            code: event.code,
+            ownerName: owner.fullName || 'Một người dùng',
+            ownerAvatarUrl: owner.avatarUrl,
+            currentLocation: location,
+            startedAt: event.startedAt,
+            message: event.message,
+          });
+        })
+    );
     return this.toMobileResponse(event);
   }
 
@@ -671,6 +677,9 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
     const event = await this.sosModel.findById(id);
     if (!event || !ACTIVE_STATUSES.includes(event.status))
       return [] as string[];
+    await this.filterRecipients(event);
+    const owner = await this.usersService.findById(event.ownerId.toString());
+    if (!owner || owner.status !== 'active') return [] as string[];
     const memberIds = [
       ...new Set([
         event.ownerId.toString(),
@@ -678,22 +687,23 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
       ]),
     ];
     const authorized: string[] = [];
-    for (const userId of memberIds) {
-      try {
-        // Recheck membership at delivery; no client-controlled room joins.
-        await this.getChatContext(userId, id, true);
-        authorized.push(userId);
-        await this.gateway.notifyUser(userId, name, payload);
-      } catch (error) {
-        if (!(
-          error instanceof ForbiddenException ||
-          error instanceof NotFoundException ||
-          error instanceof ConflictException
-        )) {
-          this.logger.warn(`SOS_CHAT_DELIVERY_FAILED sos=${id}`);
+    await Promise.all(
+      memberIds.map(async (userId) => {
+        try {
+          // Membership was refreshed once for the entire fanout above.
+          authorized.push(userId);
+          await this.gateway.notifyUser(userId, name, payload);
+        } catch (error) {
+          if (!(
+            error instanceof ForbiddenException ||
+            error instanceof NotFoundException ||
+            error instanceof ConflictException
+          )) {
+            this.logger.warn(`SOS_CHAT_DELIVERY_FAILED sos=${id}`);
+          }
         }
-      }
-    }
+      })
+    );
     return authorized;
   }
 
@@ -706,8 +716,9 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
     const ids = event.recipients
       .map((recipient) => recipient.userId?.toString())
       .filter(Boolean);
-    for (const userId of ids)
-      await this.gateway.notifyUser(userId, name, payload);
+    await Promise.all(
+      ids.map((userId) => this.gateway.notifyUser(userId, name, payload))
+    );
   }
 
   private async notifyAcknowledgedRecipients(
@@ -716,33 +727,18 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
     payload: unknown
   ) {
     await this.filterRecipients(event);
-    for (const userId of this.acknowledgedRecipientIds(event))
-      await this.gateway.notifyUser(userId, name, payload);
+    await Promise.all(
+      this.acknowledgedRecipientIds(event).map((userId) =>
+        this.gateway.notifyUser(userId, name, payload)
+      )
+    );
   }
 
   private async filterRecipients(event: SosEventDocument) {
-    const recipients = [];
-    for (const recipient of event.recipients) {
-      if (
-        recipient.contactId &&
-        !(await this.contactsService.exists(
-          event.ownerId.toString(),
-          recipient.contactId.toString()
-        ))
-      )
-        continue;
-      if (
-        !recipient.userId ||
-        (await this.contactsService.isAccepted(
-          event.ownerId.toString(),
-          recipient.userId.toString(),
-          recipient.contactId?.toString()
-        ))
-      ) {
-        recipients.push(recipient);
-      }
-    }
-    event.recipients = recipients;
+    event.recipients = await this.contactsService.filterSosRecipients(
+      event.ownerId.toString(),
+      event.recipients
+    );
   }
 
   private async toMobileResponse(event: SosEventDocument, viewerId?: string) {

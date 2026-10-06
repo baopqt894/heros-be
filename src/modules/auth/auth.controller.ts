@@ -4,6 +4,9 @@ import type { Request } from 'express';
 import { Public } from '../../common/decorators/public.decorator';
 import { AuthRateLimitService } from './auth-rate-limit.service';
 import { AuthService } from './auth.service';
+import { WebRegisterDto } from './dto/web-register.dto';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import {
   GoogleLoginDto,
   LogoutDto,
@@ -21,6 +24,22 @@ export class AuthController {
     private readonly authService: AuthService,
     private readonly rateLimit: AuthRateLimitService
   ) {}
+
+  @Public()
+  @Post('web/register')
+  async registerWeb(@Body() dto: WebRegisterDto, @Req() request: Request) {
+    this.rateLimit.consume(`web-register:ip:${request.ip}`, 10, 15 * 60_000);
+    return { success: true, data: await this.authService.registerWeb(dto) };
+  }
+
+  @HttpCode(200)
+  @Post('logout-current')
+  async logoutCurrent(@CurrentUser() user: AuthenticatedUser) {
+    return {
+      success: true,
+      data: await this.authService.logoutCurrent(user.sub, user.sessionKey),
+    };
+  }
 
   @Public()
   @Post('email/request-otp')
@@ -56,7 +75,8 @@ export class AuthController {
       data: await this.authService.passwordLogin(
         dto.email,
         dto.password,
-        dto.deviceId
+        dto.deviceId,
+        dto.clientType
       ),
     };
   }
@@ -72,7 +92,8 @@ export class AuthController {
         dto.email,
         dto.otp,
         dto.newPassword,
-        dto.deviceId
+        dto.deviceId,
+        dto.clientType
       ),
     };
   }

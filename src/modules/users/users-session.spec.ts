@@ -10,7 +10,9 @@ describe('Single active login', () => {
         activeKey = update.$set.activeSessionKey;
         return { matchedCount: 1 };
       }),
-      exists: jest.fn(async (filter) => filter.activeSessionKey === activeKey),
+      exists: jest.fn(async (filter) =>
+        filter.$or.some((item) => item.activeSessionKey === activeKey)
+      ),
     };
     const service = new UsersService(model as any);
     await service.assertSession(id, 'old');

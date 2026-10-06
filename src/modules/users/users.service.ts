@@ -30,6 +30,14 @@ export class UsersService implements OnModuleInit {
     return this.userModel.findById(id).exec();
   }
 
+  async activeIds(ids: string[]) {
+    const users = await this.userModel
+      .find({ _id: { $in: [...new Set(ids)] }, status: 'active' })
+      .select('_id')
+      .lean();
+    return new Set(users.map((user) => user._id.toString()));
+  }
+
   findByEmail(email: string) {
     return this.userModel.findOne({ email: this.normalizeEmail(email) }).exec();
   }
@@ -49,10 +57,19 @@ export class UsersService implements OnModuleInit {
     return this.userModel.findOne({ appleSubject }).exec();
   }
 
-  async activateSession(id: string, sessionKey: string) {
+  async activateSession(
+    id: string,
+    sessionKey: string,
+    clientType: 'mobile' | 'web' = 'mobile'
+  ) {
     const result = await this.userModel.updateOne(
       { _id: id, status: 'active' },
-      { $set: { activeSessionKey: sessionKey } }
+      {
+        $set: {
+          [clientType === 'web' ? 'webSessionKey' : 'activeSessionKey']:
+            sessionKey,
+        },
+      }
     );
     if (!result.matchedCount)
       throw new UnauthorizedException('Account is unavailable');
@@ -65,7 +82,7 @@ export class UsersService implements OnModuleInit {
       !(await this.userModel.exists({
         _id: id,
         status: 'active',
-        activeSessionKey: sessionKey,
+        $or: [{ activeSessionKey: sessionKey }, { webSessionKey: sessionKey }],
       }))
     ) {
       throw new UnauthorizedException({ code: 'SESSION_REVOKED' });
@@ -76,6 +93,10 @@ export class UsersService implements OnModuleInit {
     await this.userModel.updateOne(
       { _id: id, activeSessionKey: sessionKey },
       { $unset: { activeSessionKey: 1 } }
+    );
+    await this.userModel.updateOne(
+      { _id: id, webSessionKey: sessionKey },
+      { $unset: { webSessionKey: 1 } }
     );
   }
 
@@ -143,7 +164,10 @@ export class UsersService implements OnModuleInit {
     const user = await this.userModel
       .findOneAndUpdate(
         { _id: id, status: 'active' },
-        { $set: { passwordHash } },
+        {
+          $set: { passwordHash },
+          $unset: { activeSessionKey: 1, webSessionKey: 1 },
+        },
         { new: true }
       )
       .exec();
