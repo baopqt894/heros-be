@@ -16,6 +16,9 @@ Limgrow-hosted avatar URLs and hardware GPS/audio clip uploads.
 SOS rescue group chat API, realtime events and mobile integration:
 [SOS group chat guide (Vietnamese)](docs/SOS_GROUP_CHAT_MOBILE_VI.md).
 
+Complete hardware flow, GPS/WAV uploads, reconnect and device-token SOS finish:
+[Device integration guide (Vietnamese)](docs/DEVICE_FIRMWARE_CONTRACT_VI.md).
+
 ## Setup
 
 ```bash
@@ -95,6 +98,12 @@ PUT    /v1/sos/:id/sms-status
 
 POST   /v1/device/sos
 GET    /v1/device/sos/ping
+GET    /v1/device/sos/active
+GET    /v1/device/sos/:id
+PUT    /v1/device/sos/:id/location
+POST   /v1/device/sos/:id/recordings
+POST   /v1/device/sos/:id/resolve
+POST   /v1/device/sos/:id/cancel
 PUT    /v1/device/status
 ```
 

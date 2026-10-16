@@ -230,6 +230,14 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
     return event ? this.toMobileResponse(event) : null;
   }
 
+  async getDeviceEvent(ownerId: string, id: string) {
+    this.assertObjectId(id);
+    // Hardware credentials confer ownership access only, never recipient access.
+    const event = await this.sosModel.findOne({ _id: id, ownerId });
+    if (!event) throw new NotFoundException('SOS event not found');
+    return this.toMobileResponse(event, ownerId);
+  }
+
   async getIncomingActive(userId: string) {
     const events = await this.sosModel
       .find({

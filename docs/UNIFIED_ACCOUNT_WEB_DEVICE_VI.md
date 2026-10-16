@@ -1,5 +1,7 @@
 # Tài khoản chung web, app và thiết bị HEROS
 
+Flow firmware đầy đủ và API kết thúc SOS bằng device token (cập nhật 14/10/2026, cần deploy code mới): [DEVICE_FIRMWARE_CONTRACT_VI.md](DEVICE_FIRMWARE_CONTRACT_VI.md).
+
 Cập nhật 06/10/2026. Tài liệu mô tả code mới; cần deploy cả backend `heros` và website `heros-web` để dùng trên tên miền thật.
 
 ## 1. Dữ liệu và đăng nhập

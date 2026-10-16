@@ -10,6 +10,10 @@ private_uploads/
 # Environment variables
 .env
 
+# Local device test guides contain actual hardware credentials.
+docs/DEVICE_FULL_FLOW_VI.md
+docs/DEVICE_SOS_WAV_CANCEL_TEST_VI.md
+
 # Logs
 *.log
 

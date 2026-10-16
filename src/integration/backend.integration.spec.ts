@@ -1371,6 +1371,255 @@ describe('Backend contracts against isolated MongoDB', () => {
     }
   );
 
+  it.each(['resolve', 'cancel'])(
+    'finishes an SOS with hardware credentials via %s and preserves ownership/notification boundaries',
+    async (action) => {
+      const status = action === 'resolve' ? 'resolved' : 'cancelled';
+      const link = await app.get(getModelToken('EmergencyContact')).create({
+        ownerId: owner._id,
+        linkedUserId: contact._id,
+        invitationStatus: 'accepted',
+        name: 'Device flow contact',
+      });
+      const event = await chatFixture([
+        {
+          type: 'emergency_contact',
+          contactId: link._id,
+          userId: contact._id,
+          acknowledgedAt: new Date(),
+          channels: ['push'],
+        },
+      ]);
+      const foreign = await chatFixture();
+      await app.get(getModelToken('SosEvent')).updateOne(
+        { _id: foreign.id },
+        {
+          $set: {
+            ownerId: outsider._id,
+            recipients: [
+              {
+                type: 'emergency_contact',
+                userId: owner._id,
+                channels: ['push'],
+              },
+            ],
+          },
+        }
+      );
+      const path = `/device/sos/${event.id}/${action}`;
+      expect((await request(path, 'POST', {}, '')).status).toBe(401);
+      expect(
+        (
+          await request(path, 'POST', {}, '', {
+            ...hardware,
+            'X-Heros-Device-Token': 'wrong-token',
+          })
+        ).status
+      ).toBe(401);
+      expect((await request(path, 'POST', {}, ownerToken)).status).toBe(401);
+      expect(
+        (
+          await request(
+            `/device/sos/${foreign.id}/${action}`,
+            'POST',
+            {},
+            '',
+            hardware
+          )
+        ).status
+      ).toBe(404);
+      expect(
+        (
+          await request(
+            `/device/sos/${foreign.id}`,
+            'GET',
+            undefined,
+            '',
+            hardware
+          )
+        ).status
+      ).toBe(404);
+      expect(
+        (await request('/device/sos/not-an-id', 'GET', undefined, '', hardware))
+          .status
+      ).toBe(404);
+      expect(
+        (
+          await request(
+            `/device/sos/${event.id}`,
+            'GET',
+            undefined,
+            '',
+            hardware
+          )
+        ).body.data.id
+      ).toBe(event.id);
+      if (action === 'cancel')
+        expect(
+          (
+            await request(
+              path,
+              'POST',
+              { reason: 'x'.repeat(201) },
+              '',
+              hardware
+            )
+          ).status
+        ).toBe(400);
+      const uploaded = await request(
+        `/device/sos/${event.id}/recordings`,
+        'POST',
+        clip(randomUUID()),
+        '',
+        hardware
+      );
+      expect(uploaded.status).toBe(201);
+      const finished = await request(
+        path,
+        'POST',
+        action === 'cancel' ? { reason: 'Firmware test complete' } : undefined,
+        '',
+        hardware
+      );
+      expect(finished.status).toBe(201);
+      expect(finished.body.data.status).toBe(status);
+      expect(
+        finished.body.data[action === 'resolve' ? 'resolvedAt' : 'cancelledAt']
+      ).toBeTruthy();
+      if (action === 'cancel')
+        expect(finished.body.data.cancelReason).toBe('Firmware test complete');
+      const detail = await request(
+        `/device/sos/${event.id}`,
+        'GET',
+        undefined,
+        '',
+        hardware
+      );
+      expect(detail.status).toBe(200);
+      expect(detail.body.data.status).toBe(status);
+      expect((await request(path, 'POST', {}, '', hardware)).status).toBe(404);
+      expect(
+        (
+          await request(
+            `/device/sos/${event.id}/${action === 'resolve' ? 'cancel' : 'resolve'}`,
+            'POST',
+            {},
+            '',
+            hardware
+          )
+        ).status
+      ).toBe(404);
+      expect(
+        (
+          await request(
+            `/device/sos/${event.id}/recordings`,
+            'POST',
+            clip(randomUUID()),
+            '',
+            hardware
+          )
+        ).status
+      ).toBe(404);
+      expect(
+        (
+          await request(
+            `/device/sos/${event.id}/location`,
+            'PUT',
+            {
+              latitude: 10,
+              longitude: 106,
+              accuracy: 5,
+              recordedAt: new Date().toISOString(),
+            },
+            '',
+            hardware
+          )
+        ).status
+      ).toBe(404);
+      expect(
+        (
+          await request(
+            `/sos/${event.id}/recordings/${uploaded.body.data.id}`,
+            'GET',
+            undefined,
+            contactToken
+          )
+        ).status
+      ).toBe(403);
+      expect((await request(`/sos-chats/${event.id}`)).body.data.status).toBe(
+        'closed'
+      );
+      const pushes = app
+        .get(NotificationsService)
+        .dispatchPush.mock.calls.filter(
+          (call) =>
+            call[1].sosId === event.id &&
+            call[1].type ===
+              (action === 'resolve' ? 'SOS_RESOLVED' : 'SOS_CANCELLED')
+        );
+      expect(pushes).toHaveLength(1);
+      expect(pushes[0][0]).toContain(contact.id);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(
+        received.contact.some(
+          (item) =>
+            item.name === `sos.${status}` && item.payload.sosId === event.id
+        )
+      ).toBe(true);
+      expect(
+        received.owner.some(
+          (item) =>
+            item.name === 'sos.chat.closed' &&
+            item.payload.sosId === event.id &&
+            item.payload.reason === status
+        )
+      ).toBe(true);
+      await app.get(getModelToken('SosEvent')).deleteOne({ _id: foreign.id });
+    }
+  );
+
+  it('denies the full hardware flow after device revocation', async () => {
+    const devices = app.get(getModelToken('HardwareDevice'));
+    await devices.updateOne(
+      { hardwareId: hardware['X-Heros-Hardware-Id'] },
+      { $set: { enabled: false } }
+    );
+    try {
+      for (const action of ['resolve', 'cancel'])
+        expect(
+          (
+            await request(
+              `/device/sos/${eventId}/${action}`,
+              'POST',
+              {},
+              '',
+              hardware
+            )
+          ).status
+        ).toBe(401);
+      expect(
+        (
+          await request(
+            `/device/sos/${eventId}`,
+            'GET',
+            undefined,
+            '',
+            hardware
+          )
+        ).status
+      ).toBe(401);
+      expect(
+        (await request('/device/sos/ping', 'GET', undefined, '', hardware))
+          .status
+      ).toBe(401);
+    } finally {
+      await devices.updateOne(
+        { hardwareId: hardware['X-Heros-Hardware-Id'] },
+        { $set: { enabled: true } }
+      );
+    }
+  });
+
   it('queues account deletion, revokes mobile and hardware access, then removes all owned data', async () => {
     const foreign = await chatFixture();
     await app.get(getModelToken('SosEvent')).updateOne(

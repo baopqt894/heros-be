@@ -12,10 +12,20 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiConsumes, ApiHeader, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBody,
+  ApiConsumes,
+  ApiHeader,
+  ApiOperation,
+  ApiTags,
+} from '@nestjs/swagger';
 import { Public } from '../../common/decorators/public.decorator';
 import { HardwareAuthGuard } from '../hardware-devices/hardware-auth.guard';
-import { UpdateSosLocationDto, UploadSosRecordingDto } from './dto/sos.dto';
+import {
+  CancelSosDto,
+  UpdateSosLocationDto,
+  UploadSosRecordingDto,
+} from './dto/sos.dto';
 import { SosService } from './sos.service';
 
 @Public()
@@ -35,6 +45,47 @@ export class DeviceTelemetryController {
     };
   }
 
+  @Get(':id')
+  @ApiOperation({
+    summary: 'Read an owned SOS, including its final status after reconnect',
+  })
+  async detail(
+    @Req() request: { hardware: { ownerId: string } },
+    @Param('id') id: string
+  ) {
+    return {
+      success: true,
+      data: await this.sos.getDeviceEvent(request.hardware.ownerId, id),
+    };
+  }
+
+  @Post(':id/resolve')
+  @ApiOperation({
+    summary: 'Confirm that the device owner is safe and close the SOS',
+  })
+  async resolve(
+    @Req() request: { hardware: { ownerId: string } },
+    @Param('id') id: string
+  ) {
+    return {
+      success: true,
+      data: await this.sos.resolve(request.hardware.ownerId, id),
+    };
+  }
+
+  @Post(':id/cancel')
+  @ApiOperation({ summary: 'Cancel an owned SOS from the physical device' })
+  async cancel(
+    @Req() request: { hardware: { ownerId: string } },
+    @Param('id') id: string,
+    @Body() dto: CancelSosDto
+  ) {
+    return {
+      success: true,
+      data: await this.sos.cancel(request.hardware.ownerId, id, dto),
+    };
+  }
+
   @Put(':id/location')
   async location(
     @Req() request: { hardware: { ownerId: string } },
@@ -49,6 +100,17 @@ export class DeviceTelemetryController {
 
   @Post(':id/recordings')
   @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['audio', 'durationSeconds', 'clientRecordingId'],
+      properties: {
+        audio: { type: 'string', format: 'binary' },
+        durationSeconds: { type: 'number', minimum: 0.1, maximum: 120 },
+        clientRecordingId: { type: 'string', format: 'uuid' },
+      },
+    },
+  })
   @UseInterceptors(
     FileInterceptor('audio', {
       limits: { fileSize: 10 * 1024 * 1024, files: 1, fields: 3 },
