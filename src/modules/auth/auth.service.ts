@@ -24,6 +24,7 @@ import { UserType } from '../users/user-type';
 import { EmailService } from './email.service';
 import { RegisterUserDto } from './dto/register-user.dto';
 import { WebRegisterDto } from './dto/web-register.dto';
+import { REVIEWER_DEMO_EMAILS, REVIEWER_DEMO_OTP } from './reviewer-demo';
 import { PasswordService } from './password.service';
 import { EmailOtp, EmailOtpDocument } from './schemas/email-otp.schema';
 import {
@@ -230,7 +231,8 @@ export class AuthService {
     code: string,
     purpose: 'login' | 'register'
   ) {
-    if (purpose === 'login' && code === '123456' && this.isDemoEmail(email)) {
+    if (purpose === 'login' && this.isDemoEmail(email)) {
+      if (code !== REVIEWER_DEMO_OTP) throw this.invalidOtp();
       return;
     }
     const challenge = await this.otpModel
@@ -264,6 +266,9 @@ export class AuthService {
   }
 
   private isDemoEmail(email: string) {
+    if ((REVIEWER_DEMO_EMAILS as readonly string[]).includes(email)) {
+      return this.config.get<string>('REVIEWER_AUTH_ENABLED') !== 'false';
+    }
     if (this.config.get<string>('DEMO_AUTH_ENABLED') === 'false') return false;
     return ['owner@heros.vn', 'contact@heros.vn'].includes(email);
   }

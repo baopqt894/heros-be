@@ -18,6 +18,7 @@
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "seed:demo": "node --env-file=.env -r ts-node/register scripts/seed-demo-accounts.ts",
+    "seed:reviewer": "node --env-file=.env -r ts-node/register scripts/seed-reviewer-accounts.ts",
     "migrate:web": "node --env-file=.env -r ts-node/register scripts/migrate-web-sqlite.ts"
   },
   "dependencies": {

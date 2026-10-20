@@ -116,7 +116,7 @@ Password tùy chọn nhưng nếu gửi phải dài 8–128 ký tự; `gender` t
 
 Response login/register chứa `accessToken`, `accessExpiresAt: null`, `refreshToken`, `refreshExpiresAt`, `user`. Tạo installation UUID một lần cho app, giữ ổn định giữa các lần gọi; không dùng serial hardware thay `deviceId`. Login app có thể bỏ `clientType` (mặc định mobile); phiên web tồn tại cùng phiên mobile.
 
-Hai account test đã seed ở database cấu hình trong phiên trước: `owner@heros.vn`, `contact@heros.vn`, password `123456`; mock OTP `123456` chỉ áp dụng hai email này. Không dùng mock cho đăng ký user thật. Seed có thể chạy lại bằng `npm run seed:demo` nhưng sẽ reset thông tin demo; chỉ chạy trên môi trường xác định. Code hiện bật mock trừ khi `DEMO_AUTH_ENABLED=false`: public production nên tắt và đổi mật khẩu demo, tách reviewer account khỏi dữ liệu thật.
+Hai account test cũ: `owner@heros.vn`, `contact@heros.vn`, password/OTP `123456`, điều khiển bằng `DEMO_AUTH_ENABLED`. Cập nhật 20/10/2026: thêm hai account reviewer chuyên dụng `reviewer.owner@nextteam.site` (device_owner) và `reviewer.contact@nextteam.site` (emergency_contact), OTP login cố định `123456`, liên kết người thân `accepted`. Flag `REVIEWER_AUTH_ENABLED` độc lập với demo cũ. Cần deploy code và chạy `npm run seed:reviewer` trên database production. Xem cURL, cách login và review notes: [REVIEWER_DEMO_ACCOUNTS_VI.md](REVIEWER_DEMO_ACCOUNTS_VI.md). Không dùng bypass cho đăng ký/user thật.
 
 ## 6. Contact và lời mời trước khi lên Store
 

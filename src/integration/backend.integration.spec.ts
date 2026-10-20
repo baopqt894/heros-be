@@ -26,6 +26,8 @@ import { DevicesService } from '../modules/devices/devices.service';
 import { SosService } from '../modules/sos/sos.service';
 import { ApiExceptionFilter } from '../common/filters/api-exception.filter';
 import { ApiResponseInterceptor } from '../common/interceptors/api-response.interceptor';
+import { seedReviewerAccounts } from '../../scripts/seed-reviewer-accounts';
+import { ConfigService } from '@nestjs/config';
 
 jest.setTimeout(180_000);
 
@@ -167,6 +169,7 @@ describe('Backend contracts against isolated MongoDB', () => {
       PAYOS_CLIENT_ID: '',
       PAYOS_API_KEY: '',
       PAYOS_CHECKSUM_KEY: '',
+      REVIEWER_AUTH_ENABLED: 'true',
     });
     const { AppModule } = await import('../app.module');
     const module = await Test.createTestingModule({ imports: [AppModule] })
@@ -234,6 +237,206 @@ describe('Backend contracts against isolated MongoDB', () => {
     if (mongo) await mongo.stop();
     if (directory) await rm(directory, { recursive: true, force: true });
     process.env = previousEnv;
+  });
+
+  it('seeds linked reviewer accounts and accepts only their fixed login OTP repeatedly without SMTP', async () => {
+    const connection = app.get(getConnectionToken());
+    const first = await seedReviewerAccounts(connection);
+    const second = await seedReviewerAccounts(connection);
+    expect(second).toEqual(first);
+    expect(
+      await connection
+        .collection('users')
+        .countDocuments({
+          email: { $in: [first.owner.email, first.contact.email] },
+        })
+    ).toBe(2);
+    expect(
+      await connection
+        .collection('emergency_contacts')
+        .countDocuments({
+          ownerId: new Types.ObjectId(first.owner.id),
+          linkedUserId: new Types.ObjectId(first.contact.id),
+        })
+    ).toBe(1);
+    const mailsBefore = sendOtp.mock.calls.length;
+    const sessions: Record<string, string> = {};
+    for (const user of [first.owner, first.contact]) {
+      const challenge = await request(
+        '/auth/email/request-otp',
+        'POST',
+        { email: user.email.toUpperCase(), purpose: 'login' },
+        ''
+      );
+      expect(challenge.status).toBe(201);
+      expect(challenge.body.data.mockOtp).toBe(true);
+      const deviceId = `reviewer-${user.userType}-phone`;
+      expect(
+        (
+          await request(
+            '/auth/email/verify-otp',
+            'POST',
+            { email: user.email, otp: '111111', deviceId },
+            ''
+          )
+        ).status
+      ).toBe(401);
+      for (let retry = 0; retry < 2; retry++) {
+        const login = await request(
+          '/auth/email/verify-otp',
+          'POST',
+          { email: user.email, otp: '123456', deviceId },
+          ''
+        );
+        expect(login.status).toBe(201);
+        expect(login.body.data.user.userType).toBe(user.userType);
+        expect(login.body.data.user._id).toBe(user.id);
+        sessions[user.userType] = login.body.data.accessToken;
+      }
+    }
+    expect(sendOtp.mock.calls).toHaveLength(mailsBefore);
+    const ownerSession = sessions.device_owner,
+      contactSession = sessions.emergency_contact;
+    const contacts = await request(
+      '/emergency-contacts',
+      'GET',
+      undefined,
+      ownerSession
+    );
+    expect(contacts.body.data).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          linkedUserId: first.contact.id,
+          invitationStatus: 'accepted',
+        }),
+      ])
+    );
+    expect(
+      (
+        await request(
+          '/emergency-contacts/invitations',
+          'GET',
+          undefined,
+          contactSession
+        )
+      ).body.data
+    ).toEqual([]);
+    const event = await request(
+      '/sos',
+      'POST',
+      {
+        clientRequestId: randomUUID(),
+        message: 'Reviewer fixture only',
+        location: {
+          latitude: 10,
+          longitude: 106,
+          accuracy: 5,
+          recordedAt: new Date().toISOString(),
+        },
+      },
+      ownerSession
+    );
+    expect(event.status).toBe(201);
+    const eventId = event.body.data.id;
+    expect(
+      (
+        await request('/sos/incoming/active', 'GET', undefined, contactSession)
+      ).body.data.some((sos) => sos.id === eventId)
+    ).toBe(true);
+    expect(
+      (
+        await request(
+          `/sos/${eventId}/acknowledge`,
+          'POST',
+          { supportMode: 'remote' },
+          contactSession
+        )
+      ).status
+    ).toBe(201);
+    expect(
+      (await request(`/sos-chats/${eventId}`, 'GET', undefined, contactSession))
+        .status
+    ).toBe(200);
+    expect(
+      (
+        await request(
+          `/sos/${eventId}/resolve`,
+          'POST',
+          undefined,
+          ownerSession
+        )
+      ).status
+    ).toBe(201);
+    expect(
+      (
+        await request(
+          '/auth/email/verify-otp',
+          'POST',
+          {
+            email: outsider.email,
+            otp: '123456',
+            deviceId: 'ordinary-test-phone',
+          },
+          ''
+        )
+      ).status
+    ).toBe(401);
+    expect(
+      (
+        await request(
+          '/auth/email/request-otp',
+          'POST',
+          { email: 'reviewer.owner+another@nextteam.site', purpose: 'login' },
+          ''
+        )
+      ).status
+    ).toBe(401);
+    const config = app.get(ConfigService);
+    config.set('REVIEWER_AUTH_ENABLED', 'false');
+    try {
+      expect(
+        (
+          await request(
+            '/auth/email/verify-otp',
+            'POST',
+            {
+              email: first.owner.email,
+              otp: '123456',
+              deviceId: 'reviewer-disabled-phone',
+            },
+            ''
+          )
+        ).status
+      ).toBe(401);
+    } finally {
+      config.set('REVIEWER_AUTH_ENABLED', 'true');
+    }
+    const users = connection.collection('users');
+    await users.updateOne(
+      { _id: new Types.ObjectId(first.contact.id) },
+      { $set: { status: 'blocked' } }
+    );
+    try {
+      expect(
+        (
+          await request(
+            '/auth/email/verify-otp',
+            'POST',
+            {
+              email: first.contact.email,
+              otp: '123456',
+              deviceId: 'reviewer-blocked-phone',
+            },
+            ''
+          )
+        ).status
+      ).toBe(401);
+    } finally {
+      await users.updateOne(
+        { _id: new Types.ObjectId(first.contact.id) },
+        { $set: { status: 'active' } }
+      );
+    }
   });
 
   it('creates a web buyer who can login on mobile with the same password and pair one hardware device', async () => {

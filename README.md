@@ -171,6 +171,12 @@ charging state and its remaining-time estimate through `PUT /v1/device/status`.
 
 ## Demo accounts
 
+Dedicated reviewer accounts and production setup:
+[Reviewer demo guide (Vietnamese)](docs/REVIEWER_DEMO_ACCOUNTS_VI.md).
+Run `npm run seed:reviewer` to create `reviewer.owner@nextteam.site` and
+`reviewer.contact@nextteam.site` with an accepted emergency-contact link.
+Both use static email login OTP `123456` unless `REVIEWER_AUTH_ENABLED=false`.
+
 Run `npm run seed:demo` to create the accepted owner/contact pair. Both accounts
 use password and mock OTP `123456`:
 
