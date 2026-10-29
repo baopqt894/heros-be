@@ -4,9 +4,11 @@ import {
   Controller,
   Delete,
   Get,
+  HttpException,
   Param,
   Post,
   Put,
+  Req,
   Res,
   StreamableFile,
   UploadedFile,
@@ -20,7 +22,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import {
@@ -146,13 +148,28 @@ export class SosController {
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
     @Param('recordingId') recordingId: string,
+    @Req() request: Request,
     @Res({ passthrough: true }) response: Response
   ) {
-    const recording = await this.sosService.openRecording(
-      user.sub,
-      id,
-      recordingId
-    );
+    response.set('Cache-Control', 'private, no-store');
+    let recording: Awaited<ReturnType<SosService['openRecording']>>;
+    try {
+      recording = await this.sosService.openRecording(
+        user.sub,
+        id,
+        recordingId,
+        request.get('Range')
+      );
+    } catch (error) {
+      if (error instanceof HttpException && error.getStatus() === 416) {
+        const details = error.getResponse() as { sizeBytes: number };
+        response.set({
+          'Content-Range': `bytes */${details.sizeBytes}`,
+          'Accept-Ranges': 'bytes',
+        });
+      }
+      throw error;
+    }
     response.set({
       'Content-Type': recording.mimeType,
       'Content-Length': String(recording.sizeBytes),
@@ -160,8 +177,12 @@ export class SosController {
       'X-Content-Type-Options': 'nosniff',
       'Content-Disposition': 'inline',
       'Cross-Origin-Resource-Policy': 'same-origin',
-      'Accept-Ranges': 'none',
+      'Accept-Ranges': 'bytes',
     });
+    if (recording.partial) {
+      response.status(206);
+      response.set('Content-Range', recording.contentRange);
+    }
     return new StreamableFile(recording.stream);
   }
 

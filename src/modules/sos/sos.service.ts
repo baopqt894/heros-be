@@ -26,6 +26,7 @@ import { constants } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { Model, Types } from 'mongoose';
+import parseRange from 'range-parser';
 import { EmergencyContactsService } from '../emergency-contacts/emergency-contacts.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { UsersService } from '../users/users.service';
@@ -388,14 +389,21 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
     file: { buffer: Buffer; mimetype: string; size: number },
     dto: UploadSosRecordingDto
   ) {
+    const startedAt = Date.now();
     this.assertObjectId(id);
     this.validateAudioFile(file);
     if (dto.clientRecordingId) {
-      const previous = await this.sosModel.findOne({
-        _id: id,
-        ownerId,
-        'recordings.clientRecordingId': dto.clientRecordingId,
-      });
+      const previous = await this.sosModel
+        .findOne({
+          _id: id,
+          ownerId,
+          'recordings.clientRecordingId': dto.clientRecordingId,
+        })
+        .select({
+          recordings: {
+            $elemMatch: { clientRecordingId: dto.clientRecordingId },
+          },
+        });
       const recording = previous?.recordings.find(
         (r) => r.clientRecordingId === dto.clientRecordingId
       );
@@ -423,30 +431,36 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
     };
     let event: SosEventDocument | null;
     try {
-      event = await this.sosModel.findOneAndUpdate(
-        {
-          _id: id,
-          ownerId,
-          status: { $in: ACTIVE_STATUSES },
-          ...(dto.clientRecordingId
-            ? { 'recordings.clientRecordingId': { $ne: dto.clientRecordingId } }
-            : {}),
-          [`recordings.${MAX_RECORDINGS_PER_SOS - 1}`]: { $exists: false },
-          $or: [
-            { recordingBytes: { $exists: false } },
-            {
-              recordingBytes: {
-                $lte: MAX_RECORDING_BYTES_PER_SOS - file.size,
+      event = await this.sosModel
+        .findOneAndUpdate(
+          {
+            _id: id,
+            ownerId,
+            status: { $in: ACTIVE_STATUSES },
+            ...(dto.clientRecordingId
+              ? {
+                  'recordings.clientRecordingId': {
+                    $ne: dto.clientRecordingId,
+                  },
+                }
+              : {}),
+            [`recordings.${MAX_RECORDINGS_PER_SOS - 1}`]: { $exists: false },
+            $or: [
+              { recordingBytes: { $exists: false } },
+              {
+                recordingBytes: {
+                  $lte: MAX_RECORDING_BYTES_PER_SOS - file.size,
+                },
               },
-            },
-          ],
-        },
-        {
-          $push: { recordings: recording },
-          $inc: { recordingBytes: file.size },
-        },
-        { new: true, runValidators: true }
-      );
+            ],
+          },
+          {
+            $push: { recordings: recording },
+            $inc: { recordingBytes: file.size },
+          },
+          { new: true, runValidators: true }
+        )
+        .select('ownerId recipients status');
     } catch (error) {
       await unlink(filePath).catch(() => undefined);
       throw error;
@@ -454,11 +468,17 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
     if (!event) {
       await unlink(filePath).catch(() => undefined);
       if (dto.clientRecordingId) {
-        const previous = await this.sosModel.findOne({
-          _id: id,
-          ownerId,
-          'recordings.clientRecordingId': dto.clientRecordingId,
-        });
+        const previous = await this.sosModel
+          .findOne({
+            _id: id,
+            ownerId,
+            'recordings.clientRecordingId': dto.clientRecordingId,
+          })
+          .select({
+            recordings: {
+              $elemMatch: { clientRecordingId: dto.clientRecordingId },
+            },
+          });
         const recording = previous?.recordings.find(
           (r) => r.clientRecordingId === dto.clientRecordingId
         );
@@ -475,31 +495,39 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
       throw new NotFoundException('Active SOS event not found');
     }
 
+    const persistedMs = Date.now() - startedAt;
     const metadata = this.recordingResponse(id, recording);
     await this.filterRecipients(event);
     const acknowledgedIds = this.acknowledgedRecipientIds(event);
-    await this.notifyAcknowledgedRecipients(event, 'sos.recording', {
-      sosId: id,
-      recording: metadata,
-    });
-    await this.gateway.notifyUser(ownerId, 'sos.recording', {
-      sosId: id,
-      recording: metadata,
-    });
+    const authorizedMs = Date.now() - startedAt;
+    // Start push immediately after authorization; socket delivery is independent.
     this.notificationsService.dispatchPush(
       acknowledgedIds,
       {
         type: 'SOS_RECORDING_AVAILABLE',
         sosId: id,
         recordingId: recording._id.toString(),
+        createdAt: recording.createdAt.toISOString(),
         message: 'Có bản ghi âm mới từ người cần hỗ trợ',
       },
       'Bản ghi âm SOS mới'
     );
+    await this.emitToUsers([ownerId, ...acknowledgedIds], 'sos.recording', {
+      sosId: id,
+      recording: metadata,
+    });
+    this.logger.log(
+      `SOS_RECORDING_READY sos=${id} recording=${recording._id} bytes=${file.size} recipients=${acknowledgedIds.length} persistedMs=${persistedMs} authorizedMs=${authorizedMs} totalMs=${Date.now() - startedAt}`
+    );
     return metadata;
   }
 
-  async openRecording(userId: string, id: string, recordingId: string) {
+  async openRecording(
+    userId: string,
+    id: string,
+    recordingId: string,
+    rangeHeader?: string
+  ) {
     this.assertObjectId(id);
     this.assertObjectId(recordingId);
     const event = await this.sosModel.findById(id);
@@ -524,10 +552,34 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
     } catch {
       throw new NotFoundException('SOS recording file not found');
     }
+    let start = 0,
+      end = recording.sizeBytes - 1;
+    let partial = false;
+    if (rangeHeader?.startsWith('bytes=')) {
+      const ranges = parseRange(recording.sizeBytes, rangeHeader, {
+        combine: true,
+      });
+      if (ranges === -1) {
+        throw new HttpException(
+          { code: 'SOS_AUDIO_RANGE_INVALID', sizeBytes: recording.sizeBytes },
+          HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE
+        );
+      }
+      // Ignore malformed, non-byte or multipart ranges and serve a full response.
+      if (ranges !== -2 && ranges.type === 'bytes' && ranges.length === 1) {
+        ({ start, end } = ranges[0]);
+        partial = true;
+      }
+    }
     return {
-      stream: createReadStream(filePath),
+      stream: createReadStream(filePath, { start, end }),
       mimeType: recording.mimeType,
-      sizeBytes: recording.sizeBytes,
+      sizeBytes: end - start + 1,
+      totalBytes: recording.sizeBytes,
+      partial,
+      contentRange: partial
+        ? `bytes ${start}-${end}/${recording.sizeBytes}`
+        : undefined,
     };
   }
 
@@ -606,10 +658,32 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
       { new: true }
     );
     if (!event) throw new NotFoundException('Active SOS event not found');
-    await this.notifyRecipients(event, `sos.${status}`, {
-      sosId: event._id,
-      status,
-    });
+    const [, owner] = await Promise.all([
+      this.filterRecipients(event),
+      this.usersService.getMe(ownerId),
+    ]);
+    const recipientIds = event.recipients
+      .map((recipient) => recipient.userId?.toString())
+      .filter(Boolean);
+    const title =
+      status === 'resolved' ? 'Người dùng đã an toàn' : 'Tín hiệu SOS đã hủy';
+    const message =
+      status === 'resolved'
+        ? `${owner.fullName || owner.email} đã xác nhận an toàn.`
+        : `Tín hiệu SOS của ${owner.fullName || owner.email} đã được hủy.`;
+    const closedAt = event[timestampField].toISOString();
+    this.notificationsService.dispatchPush(
+      recipientIds,
+      {
+        type: status === 'resolved' ? 'SOS_RESOLVED' : 'SOS_CANCELLED',
+        sosId: id,
+        status,
+        ownerName: owner.fullName || owner.email,
+        message,
+        closedAt,
+      },
+      title
+    );
     const closed = {
       chatId: id,
       sosId: id,
@@ -617,23 +691,22 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
       reason: status,
       closedAt: event[timestampField],
     };
-    await this.gateway.notifyUser(ownerId, 'sos.chat.closed', closed);
-    await this.notifyAcknowledgedRecipients(event, 'sos.chat.closed', closed);
-    const owner = await this.usersService.getMe(ownerId);
-    this.notificationsService.dispatchPush(
-      event.recipients
-        .map((recipient) => recipient.userId?.toString())
-        .filter(Boolean),
-      {
-        type: status === 'resolved' ? 'SOS_RESOLVED' : 'SOS_CANCELLED',
-        sosId: event._id.toString(),
-        message:
-          status === 'resolved'
-            ? `${owner.fullName || owner.email} đã xác nhận an toàn.`
-            : `Tín hiệu SOS của ${owner.fullName || owner.email} đã được hủy.`,
-      },
-      status === 'resolved' ? 'Người dùng đã an toàn' : 'Tín hiệu SOS đã hủy'
-    );
+    await Promise.all([
+      this.emitToUsers([ownerId, ...recipientIds], `sos.${status}`, {
+        sosId: id,
+        status,
+        title,
+        message,
+        ownerName: owner.fullName || owner.email,
+        closedAt,
+        [timestampField]: event[timestampField],
+      }),
+      this.emitToUsers(
+        [ownerId, ...this.acknowledgedRecipientIds(event)],
+        'sos.chat.closed',
+        closed
+      ),
+    ]);
     return this.toMobileResponse(event);
   }
 
@@ -727,6 +800,21 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
     await Promise.all(
       ids.map((userId) => this.gateway.notifyUser(userId, name, payload))
     );
+  }
+
+  private async emitToUsers(userIds: string[], name: string, payload: unknown) {
+    const results = await Promise.allSettled(
+      [...new Set(userIds)].map((userId) =>
+        this.gateway.notifyUser(userId, name, payload)
+      )
+    );
+    const failed = results.filter(
+      (result) => result.status === 'rejected'
+    ).length;
+    if (failed)
+      this.logger.warn(
+        `SOS_REALTIME_DELIVERY_FAILED event=${name} failed=${failed}`
+      );
   }
 
   private async notifyAcknowledgedRecipients(

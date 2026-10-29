@@ -16,6 +16,9 @@ Limgrow-hosted avatar URLs and hardware GPS/audio clip uploads.
 SOS rescue group chat API, realtime events and mobile integration:
 [SOS group chat guide (Vietnamese)](docs/SOS_GROUP_CHAT_MOBILE_VI.md).
 
+Recording delivery, authenticated byte-range playback and safe-state alerts:
+[Audio realtime and notification guide (Vietnamese)](docs/AUDIO_REALTIME_AND_SAFE_NOTIFICATIONS_VI.md).
+
 Complete hardware flow, GPS/WAV uploads, reconnect and device-token SOS finish:
 [Device integration guide (Vietnamese)](docs/DEVICE_FIRMWARE_CONTRACT_VI.md).
 

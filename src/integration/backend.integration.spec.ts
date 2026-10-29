@@ -24,6 +24,7 @@ import { AccountService } from '../modules/account/account.service';
 import { AvatarUploadService } from '../modules/account/avatar-upload.service';
 import { DevicesService } from '../modules/devices/devices.service';
 import { SosService } from '../modules/sos/sos.service';
+import { SosGateway } from '../modules/sos/sos.gateway';
 import { ApiExceptionFilter } from '../common/filters/api-exception.filter';
 import { ApiResponseInterceptor } from '../common/interceptors/api-response.interceptor';
 import { seedReviewerAccounts } from '../../scripts/seed-reviewer-accounts';
@@ -136,7 +137,11 @@ describe('Backend contracts against isolated MongoDB', () => {
       ?.includes('application/json')
       ? await response.json()
       : await response.arrayBuffer();
-    return { status: response.status, body: data as any };
+    return {
+      status: response.status,
+      body: data as any,
+      headers: response.headers,
+    };
   }
   function clip(clientRecordingId = '36c77012-8bbf-4b4b-932f-32c6b738b169') {
     const form = new FormData();
@@ -245,19 +250,15 @@ describe('Backend contracts against isolated MongoDB', () => {
     const second = await seedReviewerAccounts(connection);
     expect(second).toEqual(first);
     expect(
-      await connection
-        .collection('users')
-        .countDocuments({
-          email: { $in: [first.owner.email, first.contact.email] },
-        })
+      await connection.collection('users').countDocuments({
+        email: { $in: [first.owner.email, first.contact.email] },
+      })
     ).toBe(2);
     expect(
-      await connection
-        .collection('emergency_contacts')
-        .countDocuments({
-          ownerId: new Types.ObjectId(first.owner.id),
-          linkedUserId: new Types.ObjectId(first.contact.id),
-        })
+      await connection.collection('emergency_contacts').countDocuments({
+        ownerId: new Types.ObjectId(first.owner.id),
+        linkedUserId: new Types.ObjectId(first.contact.id),
+      })
     ).toBe(1);
     const mailsBefore = sendOtp.mock.calls.length;
     const sessions: Record<string, string> = {};
@@ -1265,6 +1266,63 @@ describe('Backend contracts against isolated MongoDB', () => {
     ).toBe(200);
   });
 
+  it('serves protected audio byte ranges without downloading the whole clip', async () => {
+    const path = `/sos/${eventId}/recordings/${recordingId}`;
+    const full = await request(path, 'GET', undefined, contactToken);
+    expect(full.status).toBe(200);
+    const size = full.body.byteLength;
+    const first = await request(path, 'GET', undefined, contactToken, {
+      Range: 'bytes=0-3',
+    });
+    expect(first.status).toBe(206);
+    expect(first.headers.get('content-range')).toBe(`bytes 0-3/${size}`);
+    expect(first.headers.get('accept-ranges')).toBe('bytes');
+    expect(first.headers.get('cache-control')).toBe('private, no-store');
+    expect(first.headers.get('content-length')).toBe('4');
+    expect(Buffer.from(first.body).toString()).toBe('RIFF');
+    const suffix = await request(path, 'GET', undefined, contactToken, {
+      Range: 'bytes=-4',
+    });
+    expect(suffix.status).toBe(206);
+    expect(Buffer.from(suffix.body).toString()).toBe('test');
+    const invalid = await request(path, 'GET', undefined, contactToken, {
+      Range: 'bytes=999999-',
+    });
+    expect(invalid.status).toBe(416);
+    expect(invalid.headers.get('content-range')).toBe(`bytes */${size}`);
+    expect(
+      (
+        await request(path, 'GET', undefined, contactToken, {
+          Range: 'bytes=garbage',
+        })
+      ).status
+    ).toBe(200);
+    expect(
+      (
+        await request(path, 'GET', undefined, contactToken, {
+          Range: 'items=999999-',
+        })
+      ).status
+    ).toBe(200);
+    expect(
+      (
+        await request(path, 'GET', undefined, contactToken, {
+          Range: 'bytes=0-1,8-9',
+        })
+      ).status
+    ).toBe(200);
+    expect(
+      (await request(path, 'GET', undefined, '', { Range: 'bytes=0-3' })).status
+    ).toBe(401);
+    expect(
+      (
+        await request(path, 'GET', undefined, outsiderToken, {
+          Range: 'bytes=0-3',
+        })
+      ).status
+    ).toBe(403);
+  });
+
   it('revokes an accepted contact immediately for detail, incoming list, chat and playback', async () => {
     expect(
       (await request(`/sos/${eventId}/acknowledge`, 'POST', {}, contactToken))
@@ -1780,6 +1838,117 @@ describe('Backend contracts against isolated MongoDB', () => {
       await app.get(getModelToken('SosEvent')).deleteOne({ _id: foreign.id });
     }
   );
+
+  it('starts recording push before a slow socket and still notifies safe status when sockets fail', async () => {
+    const link = await app
+      .get(getModelToken('EmergencyContact'))
+      .create({
+        ownerId: owner._id,
+        linkedUserId: contact._id,
+        invitationStatus: 'accepted',
+        name: 'Delivery isolation fixture',
+      });
+    const event = await chatFixture([
+      {
+        type: 'emergency_contact',
+        contactId: link._id,
+        userId: contact._id,
+        acknowledgedAt: new Date(),
+        channels: ['push'],
+      },
+    ]);
+    const gateway = app.get(SosGateway);
+    const actual = gateway.notifyUser.bind(gateway);
+    let release: () => void, reached: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const entered = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    const spy = jest
+      .spyOn(gateway, 'notifyUser')
+      .mockImplementation(
+        async (userId: string, name: string, payload: unknown) => {
+          if (name === 'sos.recording' && userId === contact.id) {
+            reached();
+            await gate;
+          }
+          return actual(userId, name, payload);
+        }
+      );
+    let upload: Promise<any>;
+    let timer: ReturnType<typeof setTimeout>;
+    try {
+      upload = request(
+        `/device/sos/${event.id}/recordings`,
+        'POST',
+        clip(randomUUID()),
+        '',
+        hardware
+      );
+      await Promise.race([
+        entered,
+        new Promise((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error('Socket gate not reached')),
+            5000
+          );
+        }),
+      ]);
+      expect(
+        app
+          .get(NotificationsService)
+          .dispatchPush.mock.calls.some(
+            (call) =>
+              call[1].type === 'SOS_RECORDING_AVAILABLE' &&
+              call[1].sosId === event.id
+          )
+      ).toBe(true);
+    } finally {
+      clearTimeout(timer);
+      release();
+      if (upload) expect((await upload).status).toBe(201);
+      spy.mockRestore();
+    }
+    const failed = jest
+      .spyOn(gateway, 'notifyUser')
+      .mockRejectedValue(new Error('Socket adapter unavailable'));
+    try {
+      const uploadWithBrokenSockets = await request(
+        `/device/sos/${event.id}/recordings`,
+        'POST',
+        clip(randomUUID()),
+        '',
+        hardware
+      );
+      expect(uploadWithBrokenSockets.status).toBe(201);
+      const finish = await request(
+        `/device/sos/${event.id}/resolve`,
+        'POST',
+        undefined,
+        '',
+        hardware
+      );
+      expect(finish.status).toBe(201);
+      expect(finish.body.data.status).toBe('resolved');
+      const safePush = app
+        .get(NotificationsService)
+        .dispatchPush.mock.calls.find(
+          (call) =>
+            call[1].type === 'SOS_RESOLVED' && call[1].sosId === event.id
+        );
+      expect(safePush[0]).toContain(contact.id);
+      expect(safePush[1]).toMatchObject({
+        status: 'resolved',
+        ownerName: 'Owner',
+        message: 'Owner đã xác nhận an toàn.',
+      });
+      expect(safePush[1].closedAt).toBeTruthy();
+    } finally {
+      failed.mockRestore();
+    }
+  });
 
   it('denies the full hardware flow after device revocation', async () => {
     const devices = app.get(getModelToken('HardwareDevice'));
