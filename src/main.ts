@@ -6,9 +6,12 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import { join } from 'path';
 import { ApiExceptionFilter } from './common/filters/api-exception.filter';
 import { ApiResponseInterceptor } from './common/interceptors/api-response.interceptor';
+import { deviceRequestLogger } from './common/middleware/device-request-logger';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  // Register before Nest initializes body parsers and guards.
+  app.use(deviceRequestLogger());
 
   if (process.env.TRUST_PROXY === 'true') {
     app.getHttpAdapter().getInstance().set('trust proxy', 1);

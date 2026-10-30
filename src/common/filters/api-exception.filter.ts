@@ -31,16 +31,24 @@ export class ApiExceptionFilter implements ExceptionFilter {
 
     if (!isHttpException) {
       const stack = exception instanceof Error ? exception.stack : undefined;
-      this.logger.error(
-        `${request.method} ${request.originalUrl || request.url}`,
-        stack
-      );
+      if (response.locals?.deviceRequestId) {
+        this.logger.error(
+          `DEVICE_HTTP_ERROR requestId=${response.locals.deviceRequestId} errorCode=INTERNAL_SERVER_ERROR`
+        );
+      } else {
+        this.logger.error(
+          `${request.method} ${request.originalUrl || request.url}`,
+          stack
+        );
+      }
     }
 
     const error = this.normalizeError(
       status,
       isHttpException ? exception.getResponse() : undefined
     );
+    if (response.locals?.deviceRequestId)
+      response.locals.deviceErrorCode = error.code;
     response.status(status).json({
       success: false,
       code: status,
