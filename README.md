@@ -162,12 +162,16 @@ can contain up to 20 clips and 100 MiB total audio.
 ## Physical-device authentication
 
 The mobile FCM registration under `/v1/me/devices` is separate from a physical
-HEROS device. A logged-in `device_owner` pairs hardware through
-`POST /v1/me/heros-devices`. The response returns a `deviceToken` exactly once;
-only its SHA-256 hash is stored. Firmware then creates SOS events through
+HEROS device. Hardware is assigned to the buyer's existing account on the server
+before delivery with `npm run device:assign -- EMAIL HARDWARE_ID`. Mobile reads
+`GET /v1/me`: `data.device` is the assigned active hardware or `null`.
+No Bluetooth, QR scanning or mobile pairing is required. See
+[mobile integration and fulfillment](docs/MOBILE_PREASSIGNED_DEVICE_VI.md).
+Only the SHA-256 hash of the preinstalled device token is stored. Firmware creates SOS events through
 `POST /v1/device/sos` with `X-Heros-Hardware-Id` and
 `X-Heros-Device-Token`. Pairing the same hardware again rotates its token, and
-deleting it revokes further device requests.
+deleting it revokes further device requests. The legacy pairing endpoint is not
+part of the mobile flow and must not be called on login (it rotates credentials).
 
 One owner can pair one physical HEROS device. Firmware reports battery percent,
 charging state and its remaining-time estimate through `PUT /v1/device/status`.

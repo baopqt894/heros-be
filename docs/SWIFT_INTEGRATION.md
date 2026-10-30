@@ -216,9 +216,17 @@ Content-Type: application/json
 If the MessageUI delegate returns `.sent`, mobile may send
 `{ "status": "user_reported_sent" }`. This is not proof of carrier delivery.
 
-## Pairing and testing a physical HEROS device
+## Preassigned physical HEROS devices
 
-The app pairs a physical device while logged in as a `device_owner`:
+Current flow: the server assigns hardware to the buyer account before delivery.
+Mobile must read `GET /v1/me` and use `data.device` (object or `null`) to show/hide
+hardware UI. No BLE, QR scan, or pairing call is required. See
+[the current mobile contract](MOBILE_PREASSIGNED_DEVICE_VI.md).
+
+### Legacy provisioning (not a mobile onboarding step)
+
+The legacy credential provisioning endpoint remains for compatibility. Do not
+call it from mobile login/onboarding: calling it again rotates the hardware token.
 
 ```http
 POST /v1/me/heros-devices

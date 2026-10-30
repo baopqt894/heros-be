@@ -28,6 +28,7 @@ import { SosGateway } from '../modules/sos/sos.gateway';
 import { ApiExceptionFilter } from '../common/filters/api-exception.filter';
 import { ApiResponseInterceptor } from '../common/interceptors/api-response.interceptor';
 import { seedReviewerAccounts } from '../../scripts/seed-reviewer-accounts';
+import { assignHardwareDevice } from '../../scripts/assign-hardware-device';
 import { ConfigService } from '@nestjs/config';
 
 jest.setTimeout(180_000);
@@ -440,7 +441,7 @@ describe('Backend contracts against isolated MongoDB', () => {
     }
   });
 
-  it('creates a web buyer who can login on mobile with the same password and pair one hardware device', async () => {
+  it('creates a web buyer who can login on mobile with the same password and have hardware assigned before delivery', async () => {
     const email = 'buyer@test.invalid';
     await request(
       '/auth/email/request-otp',
@@ -482,13 +483,113 @@ describe('Backend contracts against isolated MongoDB', () => {
     expect(
       (await request('/me', 'GET', undefined, mobile.accessToken)).status
     ).toBe(200);
-    const paired = await request(
-      '/me/heros-devices',
+    expect(
+      (await request('/me', 'GET', undefined, mobile.accessToken)).body.data
+        .device
+    ).toBeNull();
+    expect(
+      (await request('/me', 'GET', undefined, contactToken)).body.data.device
+    ).toBeNull();
+    const assignmentInput = {
+      email,
+      hardwareId: 'BUYER-HARDWARE',
+      deviceToken: `hdv_${'b'.repeat(43)}`,
+    };
+    const connection = app.get(getConnectionToken());
+    const assigned = await assignHardwareDevice(connection, assignmentInput);
+    expect(assigned.created).toBe(true);
+    expect(
+      await assignHardwareDevice(connection, assignmentInput)
+    ).toMatchObject({ id: assigned.id, created: false });
+    await expect(
+      assignHardwareDevice(connection, {
+        ...assignmentInput,
+        deviceToken: `hdv_${'c'.repeat(43)}`,
+      })
+    ).rejects.toThrow('DEVICE_TOKEN_MISMATCH');
+    await expect(
+      assignHardwareDevice(connection, {
+        ...assignmentInput,
+        email: owner.email,
+      })
+    ).rejects.toThrow('HARDWARE_DEVICE_ALREADY_PAIRED');
+    await expect(
+      assignHardwareDevice(connection, {
+        ...assignmentInput,
+        hardwareId: 'BUYER-SECOND',
+      })
+    ).rejects.toThrow('OWNER_ALREADY_HAS_HARDWARE_DEVICE');
+    await expect(
+      assignHardwareDevice(connection, {
+        ...assignmentInput,
+        email: contact.email,
+      })
+    ).rejects.toThrow('ACTIVE_DEVICE_OWNER_REQUIRED');
+    const profile = await request('/me', 'GET', undefined, mobile.accessToken);
+    expect(profile.body.data.device).toMatchObject({
+      id: assigned.id,
+      hardwareId: 'BUYER-HARDWARE',
+      enabled: true,
+    });
+    expect(profile.body.data.device).not.toHaveProperty('secretHash');
+    expect(profile.body.data.device).not.toHaveProperty('deviceToken');
+    const deviceHeaders = {
+      'X-Heros-Hardware-Id': assignmentInput.hardwareId,
+      'X-Heros-Device-Token': assignmentInput.deviceToken,
+    };
+    expect(
+      (await request('/device/sos/ping', 'GET', undefined, '', deviceHeaders))
+        .status
+    ).toBe(200);
+    const sos = await request(
+      '/device/sos',
       'POST',
-      { hardwareId: 'BUYER-HARDWARE' },
-      mobile.accessToken
+      {
+        clientRequestId: randomUUID(),
+        message: 'Preassigned device test',
+        location: {
+          latitude: 10.7,
+          longitude: 106.6,
+          accuracy: 10,
+          recordedAt: new Date().toISOString(),
+        },
+      },
+      '',
+      deviceHeaders
     );
-    expect(paired.status).toBe(201);
+    expect(sos.status).toBe(201);
+    const sosId = sos.body.data.id;
+    expect(
+      (await request('/sos/active', 'GET', undefined, mobile.accessToken)).body
+        .data.id
+    ).toBe(sosId);
+    expect(
+      (
+        await request(
+          `/device/sos/${sosId}/resolve`,
+          'POST',
+          undefined,
+          '',
+          deviceHeaders
+        )
+      ).status
+    ).toBe(201);
+    await app
+      .get(getModelToken('HardwareDevice'))
+      .updateOne(
+        { hardwareId: 'BUYER-HARDWARE' },
+        { $set: { enabled: false } }
+      );
+    expect(
+      (await request('/me', 'GET', undefined, mobile.accessToken)).body.data
+        .device
+    ).toBeNull();
+    await expect(
+      assignHardwareDevice(connection, assignmentInput)
+    ).rejects.toThrow('HARDWARE_DEVICE_DISABLED');
+    await app
+      .get(getModelToken('HardwareDevice'))
+      .updateOne({ hardwareId: 'BUYER-HARDWARE' }, { $set: { enabled: true } });
     expect(
       (
         await request(
@@ -1840,14 +1941,12 @@ describe('Backend contracts against isolated MongoDB', () => {
   );
 
   it('starts recording push before a slow socket and still notifies safe status when sockets fail', async () => {
-    const link = await app
-      .get(getModelToken('EmergencyContact'))
-      .create({
-        ownerId: owner._id,
-        linkedUserId: contact._id,
-        invitationStatus: 'accepted',
-        name: 'Delivery isolation fixture',
-      });
+    const link = await app.get(getModelToken('EmergencyContact')).create({
+      ownerId: owner._id,
+      linkedUserId: contact._id,
+      invitationStatus: 'accepted',
+      name: 'Delivery isolation fixture',
+    });
     const event = await chatFixture([
       {
         type: 'emergency_contact',

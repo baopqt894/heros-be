@@ -10,9 +10,17 @@ export class FirmwareContractController {
     return {
       success: true,
       data: {
-        version: '1.0',
+        version: '1.1',
         transport: 'HTTPS',
         basePath: '/v1',
+        ownership: {
+          mode: 'server_preassigned',
+          profile: 'GET /v1/me',
+          profileField: 'data.device',
+          missingDevice: null,
+          mobilePairingRequired: false,
+          bluetoothRequired: false,
+        },
         qr: {
           format: 'json',
           version: 1,
@@ -21,7 +29,8 @@ export class FirmwareContractController {
         },
         authentication: {
           headers: ['X-Heros-Hardware-Id', 'X-Heros-Device-Token'],
-          credentialSource: 'POST /v1/me/heros-devices',
+          credentialSource: 'factory_provisioned_before_delivery',
+          legacyProvisioningEndpoint: 'POST /v1/me/heros-devices',
         },
         sos: {
           create: 'POST /device/sos',
@@ -53,7 +62,7 @@ export class FirmwareContractController {
         },
         firmwareApproval: 'pending',
         ble: {
-          status: 'not_configured',
+          status: 'not_required',
           serviceUuid: null,
           characteristics: [],
         },

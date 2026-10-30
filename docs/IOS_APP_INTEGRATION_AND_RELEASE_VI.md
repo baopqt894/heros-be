@@ -189,7 +189,13 @@ Universal Link cần entitlement và AASA khớp, không cần app đã public t
 
 Việc cài app qua TestFlight/Store không tự chuyển mã từ Safari sang app. Cho người dùng mở lại link hoặc nhập mã đã sao chép; chưa triển khai deferred deep linking. Hướng dẫn Apple: [Universal Links](https://developer.apple.com/documentation/xcode/allowing-apps-and-websites-to-link-to-your-content), [chẩn đoán AASA](https://developer.apple.com/documentation/technotes/tn3155-debugging-universal-links).
 
-## 8. Ghép thiết bị và pin
+## 8. Thiết bị gắn sẵn và pin
+
+Flow hiện tại thay thế bước ghép bên dưới: backend gắn thiết bị với account mua hàng trước khi giao.
+App gọi `GET /me`, đọc `data.device` object hoặc `null`, không nhập serial/QR, không ghép Bluetooth
+và không gọi `POST /me/heros-devices` khi login. Xem [hướng dẫn cập nhật mobile](MOBILE_PREASSIGNED_DEVICE_VI.md).
+
+Đoạn provisioning dưới đây là contract legacy cho vận hành, không phải bước onboarding của mobile:
 
 `GET /me/heros-devices` đọc thiết bị. `POST /me/heros-devices` body `{"hardwareId":"SERIAL_THAT","label":"Thiết bị của tôi"}` trả `deviceToken` một lần. QR chỉ là cách nhập serial; BLE provisioning và định dạng QR thực phải chốt với firmware. Đừng gửi JWT app vào firmware thay device credential.
 

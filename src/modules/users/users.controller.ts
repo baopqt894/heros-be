@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Patch, Put } from '@nestjs/common';
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { UsersService } from './users.service';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdateLocationDto } from './dto/update-location.dto';
@@ -13,8 +13,15 @@ export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
   @Get()
+  @ApiOperation({
+    summary:
+      'Account profile including its preassigned active physical device, or device: null. No Bluetooth pairing required.',
+  })
   async getMe(@CurrentUser() user: AuthenticatedUser) {
-    return { success: true, data: await this.usersService.getMe(user.sub) };
+    return {
+      success: true,
+      data: await this.usersService.getProfile(user.sub),
+    };
   }
 
   @Patch()

@@ -1,5 +1,12 @@
 # Tài khoản chung web, app và thiết bị HEROS
 
+## Cập nhật: thiết bị gắn sẵn
+
+Flow mới: vận hành gán thiết bị cho account mua hàng trên server trước khi giao.
+Mobile đọc `GET /me` → `data.device` object hoặc `null`, không ghép Bluetooth/QR
+và không gọi API pair khi login. Xem [contract hiện tại](MOBILE_PREASSIGNED_DEVICE_VI.md).
+Các ví dụ ghép thiết bị bên dưới là legacy, không dùng cho onboarding mobile mới.
+
 Flow firmware đầy đủ và API kết thúc SOS bằng device token (cập nhật 14/10/2026, cần deploy code mới): [DEVICE_FIRMWARE_CONTRACT_VI.md](DEVICE_FIRMWARE_CONTRACT_VI.md).
 
 Cập nhật 06/10/2026. Tài liệu mô tả code mới; cần deploy cả backend `heros` và website `heros-web` để dùng trên tên miền thật.
@@ -44,19 +51,19 @@ Unique indexes trên `hardwareId` và `ownerId` bảo đảm một hardware thu�
 
 Base `/v1`; response giữ `{success, code, data}`; mã lỗi ở `data.errorCode`.
 
-| API | Auth | Payload/kết quả |
-| --- | --- | --- |
-| `POST /auth/email/request-otp` | Public | `email`, `purpose=register` hoặc `login` |
-| `POST /auth/web/register` | Public | `email`, `otp`, `fullName`, `password` (8-128 ký tự), `deviceId`; trả session web |
-| `POST /auth/login` | Public | `email`, `password`, `deviceId`, `clientType=mobile/web` |
-| `POST /auth/password/reset` | Public | `email`, `otp` login, `newPassword`, `deviceId`, `clientType` |
-| `POST /auth/logout-current` | Bearer | Thu hồi đúng session của access token |
-| `GET /commerce/orders?before=ORDER_CODE` | Bearer | `orders`, `nextCursor`; tối đa 20 đơn của user |
-| `POST /commerce/orders` | Bearer | `name`, `email`, `phone`, `address`, `quantity`, `method=cod/payos`, `requestId` UUID v4 |
-| `GET /commerce/orders/:code` | Bearer | Chi tiết đơn của user và `syncPending` khi đối soát chưa xong |
-| `GET /commerce/guest-orders/:code` | Header `X-Heros-Order-Token` | Chỉ dành cho đơn cũ chưa gắn account, không thể mở đơn đã gắn bằng guest token |
-| `POST /commerce/orders/claim` | Bearer | `orderCode`, `guestToken`; cần matching email và capability thật |
-| `POST /commerce/payos/webhook` | Chữ ký payOS | Xác minh SDK và đối soát payment từ payOS trước cập nhật |
+| API                                      | Auth                         | Payload/kết quả                                                                          |
+| ---------------------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------- |
+| `POST /auth/email/request-otp`           | Public                       | `email`, `purpose=register` hoặc `login`                                                 |
+| `POST /auth/web/register`                | Public                       | `email`, `otp`, `fullName`, `password` (8-128 ký tự), `deviceId`; trả session web        |
+| `POST /auth/login`                       | Public                       | `email`, `password`, `deviceId`, `clientType=mobile/web`                                 |
+| `POST /auth/password/reset`              | Public                       | `email`, `otp` login, `newPassword`, `deviceId`, `clientType`                            |
+| `POST /auth/logout-current`              | Bearer                       | Thu hồi đúng session của access token                                                    |
+| `GET /commerce/orders?before=ORDER_CODE` | Bearer                       | `orders`, `nextCursor`; tối đa 20 đơn của user                                           |
+| `POST /commerce/orders`                  | Bearer                       | `name`, `email`, `phone`, `address`, `quantity`, `method=cod/payos`, `requestId` UUID v4 |
+| `GET /commerce/orders/:code`             | Bearer                       | Chi tiết đơn của user và `syncPending` khi đối soát chưa xong                            |
+| `GET /commerce/guest-orders/:code`       | Header `X-Heros-Order-Token` | Chỉ dành cho đơn cũ chưa gắn account, không thể mở đơn đã gắn bằng guest token           |
+| `POST /commerce/orders/claim`            | Bearer                       | `orderCode`, `guestToken`; cần matching email và capability thật                         |
+| `POST /commerce/payos/webhook`           | Chữ ký payOS                 | Xác minh SDK và đối soát payment từ payOS trước cập nhật                                 |
 
 Backend tự tính giá 590.000đ/thiết bị, giao hàng 0đ, số lượng 1-10. Không nhận giá từ client. `requestId` chống tạo trùng và không được tái sử dụng với payload/account khác. Response tạo đơn có `order`, `created`, `syncPending`, `guestToken`. Không đưa `guestToken` vào log hoặc JavaScript; web lưu HttpOnly cookie.
 

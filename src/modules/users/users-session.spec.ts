@@ -14,7 +14,7 @@ describe('Single active login', () => {
         filter.$or.some((item) => item.activeSessionKey === activeKey)
       ),
     };
-    const service = new UsersService(model as any);
+    const service = new UsersService(model as any, {} as any);
     await service.assertSession(id, 'old');
     await service.activateSession(id, 'new');
     await expect(service.assertSession(id, 'old')).rejects.toMatchObject({

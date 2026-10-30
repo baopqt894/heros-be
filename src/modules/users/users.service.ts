@@ -11,11 +11,17 @@ import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdateLocationDto } from './dto/update-location.dto';
 import { User, UserDocument } from './schemas/user.schema';
 import { UserType } from './user-type';
+import {
+  HardwareDevice,
+  HardwareDeviceDocument,
+} from '../hardware-devices/schemas/hardware-device.schema';
 
 @Injectable()
 export class UsersService implements OnModuleInit {
   constructor(
-    @InjectModel(User.name) private readonly userModel: Model<UserDocument>
+    @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
+    @InjectModel(HardwareDevice.name)
+    private readonly hardwareModel: Model<HardwareDeviceDocument>
   ) {}
 
   async onModuleInit() {
@@ -130,6 +136,32 @@ export class UsersService implements OnModuleInit {
     if (!user || user.status !== 'active')
       throw new NotFoundException('User not found');
     return user;
+  }
+
+  async getProfile(id: string) {
+    const user = await this.getMe(id);
+    const device = await this.hardwareModel
+      .findOne({ ownerId: user._id, enabled: true })
+      .select(
+        '_id hardwareId label enabled batteryPercent isCharging estimatedMinutesRemaining batteryReportedAt lastSeenAt'
+      )
+      .lean();
+    return {
+      ...user.toObject(),
+      device: device
+        ? {
+            id: device._id.toString(),
+            hardwareId: device.hardwareId,
+            label: device.label ?? null,
+            enabled: device.enabled,
+            batteryPercent: device.batteryPercent ?? null,
+            isCharging: device.isCharging ?? null,
+            estimatedMinutesRemaining: device.estimatedMinutesRemaining ?? null,
+            batteryReportedAt: device.batteryReportedAt ?? null,
+            lastSeenAt: device.lastSeenAt ?? null,
+          }
+        : null,
+    };
   }
 
   async updateMe(id: string, dto: UpdateUserDto) {
