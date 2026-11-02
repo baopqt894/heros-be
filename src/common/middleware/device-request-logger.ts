@@ -4,6 +4,8 @@ import type { NextFunction, Request, Response } from 'express';
 
 function safePath(url: string) {
   const path = url.split('?')[0];
+  if (/^(\/v1)?\/me\/devices(?:\/[^/]+)?\/?$/i.test(path))
+    return path.replace(/(\/me\/devices)\/[^/]+\/?$/i, '$1/:installationId');
   const match = path.match(
     /^(\/v1)?\/(device\/sos|sos)(?:\/(active|ping|[a-f\d]{24}))?(?:\/(location|recordings|resolve|cancel))?\/?$/i
   );
@@ -24,8 +26,10 @@ export function deviceRequestLogger(
     const path = (request.originalUrl || request.url).split('?')[0];
     const hasHardwareId = Boolean(request.headers['x-heros-hardware-id']);
     const hasDeviceToken = Boolean(request.headers['x-heros-device-token']);
+    const isPushRegistration = /^(\/v1)?\/me\/devices(?:\/|$)/i.test(path);
     if (
       !/^(\/v1)?\/device(?:\/|$)/i.test(path) &&
+      !isPushRegistration &&
       !hasHardwareId &&
       !hasDeviceToken
     ) {
@@ -39,10 +43,11 @@ export function deviceRequestLogger(
       ? request.method
       : 'UNKNOWN';
     const context = `requestId=${requestId} method=${method} path=${safePath(path)}`;
+    const prefix = isPushRegistration ? 'PUSH_DEVICE_HTTP' : 'DEVICE_HTTP';
     response.locals.deviceRequestId = requestId;
     response.setHeader('X-Heros-Request-Id', requestId);
     logger.log(
-      `DEVICE_HTTP_IN ${context} hardwareIdPresent=${hasHardwareId} deviceTokenPresent=${hasDeviceToken}`
+      `${prefix}_IN ${context} hardwareIdPresent=${hasHardwareId} deviceTokenPresent=${hasDeviceToken}`
     );
 
     let completed = false;
@@ -57,9 +62,11 @@ export function deviceRequestLogger(
             ? `HTTP_${response.statusCode}`
             : 'NONE';
       const authenticated = Boolean(
-        (request as Request & { hardware?: unknown }).hardware
+        isPushRegistration
+          ? (request as Request & { user?: unknown }).user
+          : (request as Request & { hardware?: unknown }).hardware
       );
-      const summary = `DEVICE_HTTP_OUT ${context} status=${aborted ? 'ABORTED' : response.statusCode} durationMs=${Date.now() - startedAt} authenticated=${authenticated} errorCode=${errorCode}`;
+      const summary = `${prefix}_OUT ${context} status=${aborted ? 'ABORTED' : response.statusCode} durationMs=${Date.now() - startedAt} authenticated=${authenticated} errorCode=${errorCode}`;
       if (aborted || response.statusCode >= 400) logger.warn(summary);
       else logger.log(summary);
     };

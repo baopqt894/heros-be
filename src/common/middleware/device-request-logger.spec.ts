@@ -15,6 +15,12 @@ import { deviceRequestLogger } from './device-request-logger';
 class FixtureGuard implements CanActivate {
   canActivate(context: ExecutionContext) {
     const req = context.switchToHttp().getRequest();
+    if (req.url.startsWith('/v1/me/devices')) {
+      if (req.headers.authorization !== 'Bearer private-session')
+        throw new UnauthorizedException({ code: 'SESSION_REVOKED' });
+      req.user = { sub: 'test-user' };
+      return true;
+    }
     if (req.headers['x-heros-device-token'] !== 'test-secret') {
       throw new UnauthorizedException({ code: 'DEVICE_CREDENTIAL_INVALID' });
     }
@@ -28,6 +34,14 @@ class FixtureController {
   @Post()
   create() {
     return { id: 'test-id' };
+  }
+}
+
+@Controller('me/devices')
+class PushFixtureController {
+  @Post()
+  register() {
+    return { registered: true };
   }
 }
 
@@ -45,7 +59,7 @@ describe('Device HTTP diagnostics', () => {
 
   beforeAll(async () => {
     const module = await Test.createTestingModule({
-      controllers: [FixtureController],
+      controllers: [FixtureController, PushFixtureController],
     }).compile();
     app = module.createNestApplication({ logger: false });
     app.use(deviceRequestLogger(logger));
@@ -134,6 +148,33 @@ describe('Device HTTP diagnostics', () => {
     const response = await fetch(`${base}/v1/health`);
     await response.text();
     expect(output()).toBe('');
+  });
+
+  it('logs mobile push registration even when authentication rejects it', async () => {
+    const response = await fetch(`${base}/v1/me/devices`, { method: 'POST' });
+    await response.text();
+    expect(response.status).toBe(401);
+    expect(output()).toContain('PUSH_DEVICE_HTTP_IN');
+    expect(output()).toContain('PUSH_DEVICE_HTTP_OUT');
+    expect(output()).toContain('path=/v1/me/devices');
+    expect(output()).toContain('authenticated=false errorCode=SESSION_REVOKED');
+  });
+
+  it('tracks authenticated mobile registration without exposing JWT or token', async () => {
+    const response = await fetch(`${base}/v1/me/devices`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: 'Bearer private-session',
+      },
+      body: JSON.stringify({ pushToken: 'private-fcm-token' }),
+    });
+    await response.text();
+    expect(response.status).toBe(201);
+    expect(output()).toContain('status=201');
+    expect(output()).toContain('authenticated=true');
+    expect(output()).not.toContain('private-session');
+    expect(output()).not.toContain('private-fcm-token');
   });
 
   it('redacts SOS identifiers and logs an aborted request only once', () => {
