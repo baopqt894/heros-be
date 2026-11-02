@@ -141,7 +141,7 @@ export class UsersService implements OnModuleInit {
   async getProfile(id: string) {
     const user = await this.getMe(id);
     const device = await this.hardwareModel
-      .findOne({ ownerId: user._id, enabled: true })
+      .findOne({ ownerId: user._id, enabled: true, activationPending: { $ne: true } })
       .select(
         '_id hardwareId label enabled batteryPercent isCharging estimatedMinutesRemaining batteryReportedAt lastSeenAt'
       )

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -6,11 +7,12 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { Model, Types } from 'mongoose';
 import { UsersService } from '../users/users.service';
 import { ProvisionHardwareDeviceDto } from './dto/provision-hardware-device.dto';
 import { UpdateHardwareStatusDto } from './dto/update-hardware-status.dto';
+import { deviceActivationHash, normalizeDeviceActivationCode } from './device-activation-code';
 import {
   HardwareDevice,
   HardwareDeviceDocument,
@@ -25,62 +27,37 @@ export class HardwareDevicesService {
   ) {}
 
   async provision(ownerId: string, dto: ProvisionHardwareDeviceDto) {
+    // Factory credentials must never be replaced by a mobile pairing call.
+    throw new ForbiddenException({ code: 'HARDWARE_SELF_PROVISIONING_DISABLED' });
+  }
+
+  async activate(ownerId: string, activationCode: string) {
     const owner = await this.usersService.getMe(ownerId);
-    if (owner.userType !== 'device_owner') {
+    if (owner.userType !== 'device_owner')
       throw new ForbiddenException({ code: 'SOS_DEVICE_OWNER_REQUIRED' });
-    }
-
-    const hardwareId = this.normalizeHardwareId(dto.hardwareId);
-    const existing = await this.hardwareDeviceModel
-      .findOne({ hardwareId })
-      .select('+secretHash');
-    if (existing && existing.ownerId.toString() !== ownerId) {
-      throw new ConflictException({ code: 'HARDWARE_DEVICE_ALREADY_PAIRED' });
-    }
-
-    const deviceToken = `hdv_${randomBytes(32).toString('base64url')}`;
-    let device: HardwareDeviceDocument;
-    try {
-      device = await this.hardwareDeviceModel.findOneAndUpdate(
-        { hardwareId, ownerId: new Types.ObjectId(ownerId) },
-        {
-          $set: {
-            enabled: true,
-            label: dto.label?.trim(),
-            secretHash: this.hashToken(deviceToken),
-          },
-          $setOnInsert: {
-            hardwareId,
-            ownerId: new Types.ObjectId(ownerId),
-          },
-        },
-        { new: true, runValidators: true, upsert: true }
-      );
-    } catch (error: any) {
-      if (error?.code === 11000) {
-        throw new ConflictException({
-          code: error?.keyPattern?.ownerId
-            ? 'OWNER_ALREADY_HAS_HARDWARE_DEVICE'
-            : 'HARDWARE_DEVICE_ALREADY_PAIRED',
-        });
-      }
-      throw error;
-    }
-
+    const normalized = normalizeDeviceActivationCode(activationCode);
+    if (!normalized) throw new BadRequestException({ code: 'DEVICE_ACTIVATION_INVALID' });
+    const hash = deviceActivationHash(normalized);
+    const device = await this.hardwareDeviceModel.findOneAndUpdate(
+      { ownerId: new Types.ObjectId(ownerId), enabled: true, activationPending: true, activationCodeHash: hash },
+      { $set: { activationPending: false, activatedAt: new Date(), activationUsedHash: hash }, $unset: { activationCodeHash: 1 } },
+      { new: true, runValidators: true }
+    );
+    const current = device || await this.hardwareDeviceModel.findOne({
+      ownerId: new Types.ObjectId(ownerId), enabled: true,
+      activationPending: { $ne: true }, activationUsedHash: hash,
+    });
+    if (!current) throw new BadRequestException({ code: 'DEVICE_ACTIVATION_INVALID' });
     return {
-      id: device._id,
-      hardwareId: device.hardwareId,
-      label: device.label,
-      enabled: device.enabled,
-      deviceToken,
-      tokenWarning:
-        'Store this token securely now. The API will not return it again.',
+      device: { id: current._id.toString(), hardwareId: current.hardwareId },
+      activated: true,
+      alreadyActivated: !device,
     };
   }
 
   list(ownerId: string) {
     return this.hardwareDeviceModel
-      .find({ ownerId: new Types.ObjectId(ownerId) })
+      .find({ ownerId: new Types.ObjectId(ownerId), activationPending: { $ne: true } })
       .sort({ createdAt: -1 });
   }
 
@@ -129,6 +106,8 @@ export class HardwareDevicesService {
     ) {
       throw this.invalidCredential();
     }
+    if (device.activationPending)
+      throw new ForbiddenException({ code: 'DEVICE_ACTIVATION_REQUIRED' });
     const owner = await this.usersService.findById(device.ownerId.toString());
     if (!owner || owner.status !== 'active') throw this.invalidCredential();
     void this.hardwareDeviceModel

@@ -10,7 +10,7 @@ export class FirmwareContractController {
     return {
       success: true,
       data: {
-        version: '1.1',
+        version: '1.2',
         transport: 'HTTPS',
         basePath: '/v1',
         ownership: {
@@ -20,17 +20,21 @@ export class FirmwareContractController {
           missingDevice: null,
           mobilePairingRequired: false,
           bluetoothRequired: false,
+          activation: 'POST /v1/me/heros-devices/activate',
+          activationInput: 'activationCode',
+          activationMethods: ['purchase_email_code', 'qr_code'],
         },
         qr: {
           format: 'json',
           version: 1,
-          example: { v: 1, hardwareId: 'HEROS-DEV-0001' },
-          containsCredential: false,
+          example: { v: 1, type: 'heros-device-activation', hardwareId: 'HEROS-DEV-0001', activationCode: 'HRS-XXXX-XXXX-XXXX-XXXX-XXXX' },
+          containsDeviceToken: false,
+          containsActivationSecret: true,
         },
         authentication: {
           headers: ['X-Heros-Hardware-Id', 'X-Heros-Device-Token'],
           credentialSource: 'factory_provisioned_before_delivery',
-          legacyProvisioningEndpoint: 'POST /v1/me/heros-devices',
+          legacyProvisioningEndpoint: 'disabled',
         },
         sos: {
           create: 'POST /device/sos',

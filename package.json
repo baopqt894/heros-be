@@ -20,6 +20,7 @@
     "seed:demo": "node --env-file=.env -r ts-node/register scripts/seed-demo-accounts.ts",
     "seed:reviewer": "node --env-file=.env -r ts-node/register scripts/seed-reviewer-accounts.ts",
     "device:assign": "node --env-file=.env -r ts-node/register scripts/assign-hardware-device.ts",
+    "device:activation": "node --env-file=.env -r ts-node/register scripts/prepare-device-activation.ts",
     "migrate:web": "node --env-file=.env -r ts-node/register scripts/migrate-web-sqlite.ts"
   },
   "dependencies": {

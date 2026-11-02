@@ -43,6 +43,7 @@ export async function assignHardwareDevice(
   const verifyExisting = (existing: HardwareDeviceDocument) => {
     if (existing.ownerId.toString() !== owner._id.toString())
       throw new Error('HARDWARE_DEVICE_ALREADY_PAIRED');
+    if (existing.activationPending) throw new Error('DEVICE_ACTIVATION_PENDING');
     if (!existing.enabled) throw new Error('HARDWARE_DEVICE_DISABLED');
     if (digest && existing.secretHash !== digest)
       throw new Error('DEVICE_TOKEN_MISMATCH');
