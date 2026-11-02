@@ -79,16 +79,6 @@ export class EmailService {
     });
   }
 
-  async sendDeviceActivation(email: string, input: { activationCode: string; hardwareId: string; orderCode: number }) {
-    if (!this.transporter) throw new ServiceUnavailableException({ code: 'EMAIL_NOT_CONFIGURED' });
-    await this.transporter.sendMail({
-      from: this.config.get<string>('EMAIL_FROM'), to: email,
-      subject: `Kích hoạt thiết bị HEROS - đơn hàng ${input.orderCode}`,
-      text: `Thiết bị HEROS ${input.hardwareId} đã được chuẩn bị cho đơn hàng ${input.orderCode}.\nMã kích hoạt: ${input.activationCode}\nĐăng nhập app bằng đúng tài khoản mua hàng, chọn Kích hoạt thiết bị để nhập mã hoặc quét QR trong hộp. Hai cách dùng cùng một mã. Không chia sẻ mã.`,
-      html: `<p>Thiết bị HEROS <strong>${this.escapeHtml(input.hardwareId)}</strong> đã được chuẩn bị cho đơn hàng ${input.orderCode}.</p><p>Mã kích hoạt: <strong>${this.escapeHtml(input.activationCode)}</strong></p><p>Đăng nhập app bằng đúng tài khoản mua hàng, chọn Kích hoạt thiết bị để nhập mã hoặc quét QR trong hộp. Hai cách dùng cùng một mã. Không chia sẻ mã.</p>`,
-    });
-  }
-
   private escapeHtml(value: string) {
     return value.replace(/[&<>'"]/g, (character) => {
       const entities: Record<string, string> = {

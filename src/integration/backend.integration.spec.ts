@@ -29,8 +29,6 @@ import { ApiExceptionFilter } from '../common/filters/api-exception.filter';
 import { ApiResponseInterceptor } from '../common/interceptors/api-response.interceptor';
 import { seedReviewerAccounts } from '../../scripts/seed-reviewer-accounts';
 import { assignHardwareDevice } from '../../scripts/assign-hardware-device';
-import { prepareDeviceActivation } from '../../scripts/prepare-device-activation';
-import { generateDeviceActivationCode, deviceActivationHash, normalizeDeviceActivationCode } from '../modules/hardware-devices/device-activation-code';
 import { ConfigService } from '@nestjs/config';
 
 jest.setTimeout(180_000);
@@ -601,14 +599,14 @@ describe('Backend contracts against isolated MongoDB', () => {
           mobile.accessToken
         )
       ).status
-    ).toBe(403);
+    ).toBe(409);
     expect(
       (
         await request('/me/heros-devices', 'POST', {
           hardwareId: 'BUYER-HARDWARE',
         })
       ).status
-    ).toBe(403);
+    ).toBe(409);
     const input = {
       name: 'Buyer',
       email,
@@ -1070,13 +1068,13 @@ describe('Backend contracts against isolated MongoDB', () => {
       phone: '+84901111111',
     });
     contactId = link.id;
-    const factoryToken = `hdv_${'d'.repeat(43)}`;
-    await assignHardwareDevice(app.get(getConnectionToken()), {
-      email: owner.email, hardwareId: 'HEROS-INTEGRATION-001', deviceToken: factoryToken,
+    const provision = await request('/me/heros-devices', 'POST', {
+      hardwareId: 'HEROS-INTEGRATION-001',
     });
+    expect(provision.status).toBe(201);
     hardware = {
       'X-Heros-Hardware-Id': 'HEROS-INTEGRATION-001',
-      'X-Heros-Device-Token': factoryToken,
+      'X-Heros-Device-Token': provision.body.data.deviceToken,
     };
     const created = await request(
       '/device/sos',

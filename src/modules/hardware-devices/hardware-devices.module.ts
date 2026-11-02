@@ -5,7 +5,6 @@ import { HardwareDevicesController } from './hardware-devices.controller';
 import { DeviceStatusController } from './device-status.controller';
 import { HardwareDevicesService } from './hardware-devices.service';
 import { FirmwareContractController } from './firmware-contract.controller';
-import { AuthRateLimitService } from '../auth/auth-rate-limit.service';
 import {
   HardwareDevice,
   HardwareDeviceSchema,
@@ -19,7 +18,7 @@ import {
     ]),
   ],
   controllers: [HardwareDevicesController, DeviceStatusController, FirmwareContractController],
-  providers: [HardwareDevicesService, AuthRateLimitService],
+  providers: [HardwareDevicesService],
   exports: [HardwareDevicesService],
 })
 export class HardwareDevicesModule {}

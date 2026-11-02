@@ -21,24 +21,6 @@ export class HardwareDevice {
   @Prop({ required: true, select: false })
   secretHash: string;
 
-  @Prop({ default: false })
-  activationPending: boolean;
-
-  @Prop({ select: false, unique: true, sparse: true })
-  activationCodeHash?: string;
-
-  @Prop({ select: false })
-  activationUsedHash?: string;
-
-  @Prop()
-  activatedAt?: Date;
-
-  @Prop()
-  activationOrderCode?: number;
-
-  @Prop()
-  activationEmailSentAt?: Date;
-
   @Prop({ default: true })
   enabled: boolean;
 

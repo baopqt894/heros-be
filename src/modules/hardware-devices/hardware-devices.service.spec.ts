@@ -6,7 +6,7 @@ describe('HardwareDevicesService', () => {
   const ownerId = new Types.ObjectId();
   const deviceId = new Types.ObjectId();
 
-  it('blocks legacy provisioning without changing the factory token', async () => {
+  it('returns a one-time token and stores only its hash', async () => {
     const select = jest.fn().mockResolvedValue(null);
     const model = {
       findOne: jest.fn().mockReturnValue({ select }),
@@ -24,10 +24,15 @@ describe('HardwareDevicesService', () => {
       } as any
     );
 
-    await expect(service.provision(ownerId.toString(), {
-      hardwareId: 'HEROS-TEST-001', label: 'Test device',
-    })).rejects.toMatchObject({ response: { code: 'HARDWARE_SELF_PROVISIONING_DISABLED' } });
-    expect(model.findOneAndUpdate).not.toHaveBeenCalled();
+    const result = await service.provision(ownerId.toString(), {
+      hardwareId: 'HEROS-TEST-001',
+      label: 'Test device',
+    });
+
+    expect(result.deviceToken).toMatch(/^hdv_[A-Za-z0-9_-]{43}$/);
+    const update = model.findOneAndUpdate.mock.calls[0][1];
+    expect(update.$set.secretHash).toHaveLength(64);
+    expect(update.$set.secretHash).not.toContain(result.deviceToken);
   });
 
   it('authenticates a valid physical-device token', async () => {

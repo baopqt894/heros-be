@@ -36,7 +36,6 @@ describe('Preassigned hardware in profile', () => {
     expect(hardware.findOne).toHaveBeenCalledWith({
       ownerId: id,
       enabled: true,
-      activationPending: { $ne: true },
     });
   });
 
