@@ -7,7 +7,7 @@ function safePath(url: string) {
   if (/^(\/v1)?\/me\/devices(?:\/[^/]+)?\/?$/i.test(path))
     return path.replace(/(\/me\/devices)\/[^/]+\/?$/i, '$1/:installationId');
   const match = path.match(
-    /^(\/v1)?\/(device\/sos|sos)(?:\/(active|ping|[a-f\d]{24}))?(?:\/(location|recordings|resolve|cancel))?\/?$/i
+    /^(\/v1)?\/(device\/sos|sos)(?:\/(active|ping|[a-f\d]{24}))?(?:\/(location|recordings|resolve|cancel|rescue-status))?\/?$/i
   );
   if (match) {
     const segment = match[3];

@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   Param,
   Post,
   Put,
@@ -42,6 +43,19 @@ export class DeviceTelemetryController {
     return {
       success: true,
       data: await this.sos.getActive(request.hardware.ownerId),
+    };
+  }
+
+  @Get(':id/rescue-status')
+  @Header('Cache-Control', 'no-store')
+  @ApiOperation({ summary: 'Poll the rescue status of an owned SOS' })
+  async rescueStatus(
+    @Req() request: { hardware: { ownerId: string } },
+    @Param('id') id: string
+  ) {
+    return {
+      success: true,
+      data: await this.sos.getDeviceRescueStatus(request.hardware.ownerId, id),
     };
   }
 

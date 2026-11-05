@@ -239,6 +239,54 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
     return this.toMobileResponse(event, ownerId);
   }
 
+  async getDeviceRescueStatus(ownerId: string, id: string) {
+    this.assertObjectId(id);
+    const event = await this.sosModel
+      .findOne({ _id: id, ownerId })
+      .select(
+        'status recipients.userId recipients.contactId recipients.acknowledgedAt recipients.supportMode'
+      )
+      .lean();
+    if (!event) throw new NotFoundException('SOS event not found');
+
+    const active = ACTIVE_STATUSES.includes(event.status);
+    const acknowledged = active
+      ? event.recipients.filter(
+          (recipient) => recipient.userId && recipient.acknowledgedAt
+        )
+      : [];
+    const responders = acknowledged.length
+      ? await this.contactsService.filterSosRecipients(ownerId, acknowledged)
+      : [];
+    const count = (mode?: 'in_person' | 'remote') =>
+      new Set(
+        responders
+          .filter((r) => !mode || r.supportMode === mode)
+          .map((r) => r.userId.toString())
+      ).size;
+    const inPersonCount = count('in_person');
+    const remoteCount = count('remote');
+    const responderCount = count();
+    const rescueStatus = !active
+      ? 'SOS_CLOSED'
+      : inPersonCount > 0
+        ? 'RESPONDER_EN_ROUTE'
+        : remoteCount > 0
+          ? 'REMOTE_SUPPORT'
+          : responderCount > 0
+            ? 'SUPPORT_CONFIRMED'
+            : 'WAITING_FOR_RESPONDER';
+    return {
+      sosId: event._id.toString(),
+      sosStatus: event.status,
+      rescueStatus,
+      hasInPersonResponder: inPersonCount > 0,
+      responderCount,
+      inPersonCount,
+      remoteCount,
+    };
+  }
+
   async getIncomingActive(userId: string) {
     const events = await this.sosModel
       .find({

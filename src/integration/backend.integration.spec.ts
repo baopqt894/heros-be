@@ -2049,6 +2049,89 @@ describe('Backend contracts against isolated MongoDB', () => {
     }
   });
 
+  it('polls only the owned SOS for current, eligible rescue confirmations', async () => {
+    const contacts = app.get(getModelToken('EmergencyContact'));
+    const events = app.get(getModelToken('SosEvent'));
+    const link = await contacts.create({
+      ownerId: owner._id,
+      linkedUserId: contact._id,
+      invitationStatus: 'accepted',
+      name: 'Rescue poll fixture',
+    });
+    const event = await chatFixture([
+      {
+        type: 'emergency_contact',
+        contactId: link._id,
+        userId: contact._id,
+        channels: ['push'],
+      },
+    ]);
+    const path = `/device/sos/${event.id}/rescue-status`;
+    const poll = () => request(path, 'GET', undefined, '', hardware);
+    try {
+      expect((await request(path, 'GET', undefined, '')).status).toBe(401);
+      const waiting = await poll();
+      expect(waiting.status).toBe(200);
+      expect(waiting.headers.get('cache-control')).toBe('no-store');
+      expect(waiting.body.data).toEqual({
+        sosId: event.id,
+        sosStatus: 'active',
+        rescueStatus: 'WAITING_FOR_RESPONDER',
+        hasInPersonResponder: false,
+        responderCount: 0,
+        inPersonCount: 0,
+        remoteCount: 0,
+      });
+      const ack = await request(
+        `/sos/${event.id}/acknowledge`,
+        'POST',
+        { supportMode: 'in_person' },
+        contactToken
+      );
+      expect(ack.status).toBe(201);
+      expect((await poll()).body.data).toMatchObject({
+        rescueStatus: 'RESPONDER_EN_ROUTE',
+        hasInPersonResponder: true,
+        inPersonCount: 1,
+      });
+      await events.updateOne(
+        { _id: event._id },
+        { $set: { 'recipients.0.supportMode': 'remote' } }
+      );
+      expect((await poll()).body.data).toMatchObject({
+        rescueStatus: 'REMOTE_SUPPORT',
+        hasInPersonResponder: false,
+        remoteCount: 1,
+      });
+      await events.updateOne(
+        { _id: event._id },
+        { $unset: { 'recipients.0.supportMode': 1 } }
+      );
+      expect((await poll()).body.data.rescueStatus).toBe('SUPPORT_CONFIRMED');
+      await contacts.deleteOne({ _id: link._id });
+      expect((await poll()).body.data.rescueStatus).toBe(
+        'WAITING_FOR_RESPONDER'
+      );
+      await events.updateOne(
+        { _id: event._id },
+        { $set: { status: 'resolved' } }
+      );
+      expect((await poll()).body.data).toMatchObject({
+        rescueStatus: 'SOS_CLOSED',
+        sosStatus: 'resolved',
+        hasInPersonResponder: false,
+      });
+      await events.updateOne(
+        { _id: event._id },
+        { $set: { ownerId: outsider._id } }
+      );
+      expect((await poll()).status).toBe(404);
+    } finally {
+      await events.deleteOne({ _id: event._id });
+      await contacts.deleteOne({ _id: link._id });
+    }
+  });
+
   it('denies the full hardware flow after device revocation', async () => {
     const devices = app.get(getModelToken('HardwareDevice'));
     await devices.updateOne(

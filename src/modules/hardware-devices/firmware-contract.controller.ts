@@ -35,6 +35,7 @@ export class FirmwareContractController {
         sos: {
           create: 'POST /device/sos',
           active: 'GET /device/sos/active',
+          rescueStatus: 'GET /device/sos/:id/rescue-status',
           idempotencyField: 'clientRequestId',
         },
         gps: {

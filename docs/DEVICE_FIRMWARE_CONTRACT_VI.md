@@ -150,6 +150,47 @@ Nếu timeout, gửi lại cùng `clientRequestId`. Request lặp có thể tr�
 
 409 `SOS_ALREADY_ACTIVE`: lấy `/device/sos/active` rồi tiếp tục sự cố hiện tại. Backend giới hạn 5 SOS mới/10 phút/owner, nên không bấm test liên tục bằng UUID mới để retry.
 
+### Poll trạng thái ứng cứu
+
+Dùng `data.id` từ API tạo/lấy SOS đang hoạt động, không dùng mã SOS hiển thị:
+
+```bash
+curl 'https://heros.nextteam.site/v1/device/sos/YOUR_SOS_ID/rescue-status' \
+  -H "X-Heros-Hardware-Id: ${HARDWARE_ID}" \
+  -H "X-Heros-Device-Token: ${DEVICE_TOKEN}"
+```
+
+```json
+{
+  "success": true,
+  "code": 200,
+  "data": {
+    "sosId": "YOUR_SOS_ID",
+    "sosStatus": "active",
+    "rescueStatus": "WAITING_FOR_RESPONDER",
+    "hasInPersonResponder": false,
+    "responderCount": 0,
+    "inPersonCount": 0,
+    "remoteCount": 0
+  }
+}
+```
+
+| `rescueStatus`          | Ý nghĩa                                                                             |
+| ----------------------- | ----------------------------------------------------------------------------------- |
+| `WAITING_FOR_RESPONDER` | Chưa có người còn quyền xác nhận ứng cứu                                            |
+| `RESPONDER_EN_ROUTE`    | Có người xác nhận hỗ trợ trực tiếp (`in_person`); không xác minh GPS hay đã đến nơi |
+| `REMOTE_SUPPORT`        | Có hỗ trợ từ xa, chưa có người xác nhận đến trực tiếp                               |
+| `SUPPORT_CONFIRMED`     | Có xác nhận nhưng chưa chỉ định đến trực tiếp hay từ xa                             |
+| `SOS_CLOSED`            | SOS đã kết thúc; xem `sosStatus` là `resolved` hay `cancelled`                      |
+
+Poll mỗi 5 giây trong SOS, mỗi lần chờ response xong rồi mới hẹn lần tiếp theo.
+Chỉ phát tín hiệu “có người đến” khi `hasInPersonResponder` chuyển sang `true`;
+không phát lại mỗi lần nhận cùng trạng thái. Dừng polling khi `SOS_CLOSED`.
+Timeout hoặc lỗi mạng không đồng nghĩa chưa có người đến: giữ trạng thái cuối và retry có backoff.
+`401`: kiểm tra credential. `404`: kiểm tra SOS ID và gọi lại API active để đồng bộ.
+Không cache response; API chỉ trả dữ liệu của SOS thuộc chủ thiết bị.
+
 ## 6. Gửi vị trí liên tục trong Emergency Mode
 
 ```bash
