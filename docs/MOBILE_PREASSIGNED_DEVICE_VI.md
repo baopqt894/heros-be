@@ -1,5 +1,7 @@
 # Mobile: thiết bị gắn sẵn với tài khoản mua hàng
 
+Hướng dẫn bổ sung phần pin: [MOBILE_DEVICE_BATTERY_UPDATE_VI.md](MOBILE_DEVICE_BATTERY_UPDATE_VI.md).
+
 ## 1. Flow hiện tại
 
 1. Khách tạo account trên web và mua hàng. Web và mobile dùng chung account/database.

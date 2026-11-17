@@ -62,4 +62,23 @@ Khi có người xác nhận đến trực tiếp, `rescueStatus` là `RESPONDER
 - Xác nhận đã an toàn hoặc hủy SOS: nhận `SOS_CLOSED` và dừng poll.
 - Ngắt mạng khi polling: không tạo SOS mới, không tự đổi trạng thái ứng cứu.
 
+## Gửi phần trăm pin lên backend
+
+Dùng API hiện có `PUT /v1/device/status`, với cùng hardware ID và device token.
+Không cần SOS đang hoạt động để báo pin.
+
+```bash
+curl -i -X PUT 'https://heros.nextteam.site/v1/device/status' \
+  -H "X-Heros-Hardware-Id: ${HARDWARE_ID}" \
+  -H "X-Heros-Device-Token: ${DEVICE_TOKEN}" \
+  -H 'Content-Type: application/json' \
+  -d '{"batteryPercent":82,"isCharging":false}'
+```
+
+- `batteryPercent`: bắt buộc, số nguyên từ 0 đến 100. Gửi số `82`, không gửi chuỗi `"82%"`.
+- `isCharging`: bắt buộc, boolean `true` hoặc `false`.
+- `estimatedMinutesRemaining`: tùy chọn, số nguyên không âm tính bằng phút; bỏ qua nếu chưa có ước lượng đáng tin.
+- Gửi khi khởi động/kết nối lại hoặc khi pin hay trạng thái sạc thay đổi đáng kể. Không cần gửi pin theo mỗi lượt poll SOS.
+- HTTP `200`: đã lưu. Mobile đọc `data.device.batteryPercent`, `isCharging` và `batteryReportedAt` từ `GET /v1/me` của chủ thiết bị.
+
 Không in device token vào log. Xem thêm [contract firmware đầy đủ](DEVICE_FIRMWARE_CONTRACT_VI.md).

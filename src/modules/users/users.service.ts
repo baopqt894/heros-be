@@ -44,6 +44,14 @@ export class UsersService implements OnModuleInit {
     return new Set(users.map((user) => user._id.toString()));
   }
 
+  findActiveChatProfiles(ids: string[]) {
+    return this.userModel
+      .find({ _id: { $in: [...new Set(ids)] }, status: 'active' })
+      .select('_id fullName avatarUrl')
+      .lean()
+      .exec();
+  }
+
   findByEmail(email: string) {
     return this.userModel.findOne({ email: this.normalizeEmail(email) }).exec();
   }

@@ -53,6 +53,9 @@ class SosRecipient {
   @Prop()
   acknowledgedAt?: Date;
 
+  @Prop()
+  declinedAt?: Date;
+
   @Prop({ enum: ['in_person', 'remote'] })
   supportMode?: 'in_person' | 'remote';
 }

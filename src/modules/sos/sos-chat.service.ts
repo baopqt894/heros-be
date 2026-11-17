@@ -82,8 +82,10 @@ export class SosChatService {
 
   async get(userId: string, id: string) {
     const event = await this.sos.getChatContext(userId, id);
-    const members = await this.members(event);
-    const snapshot = await this.sos.getOne(userId, id);
+    const [members, snapshot] = await Promise.all([
+      this.members(event),
+      this.sos.getOne(userId, id),
+    ]);
     // Resolution/unlink can race the snapshot query; never return a stale grant.
     const current = await this.sos.getChatContext(userId, id);
     return {
@@ -370,17 +372,22 @@ export class SosChatService {
   }
 
   private async profiles(ids: string[]) {
-    const profiles = new Map<string, { name: string; avatarUrl?: string }>();
-    for (const id of new Set(ids)) {
-      const user = await this.users.findById(id);
-      profiles.set(id, {
-        name:
-          user?.status === 'active'
-            ? user.fullName || 'Người dùng HEROS'
-            : 'Tài khoản không còn hoạt động',
-        avatarUrl: user?.status === 'active' ? user.avatarUrl : undefined,
+    const profiles = new Map(
+      ids.map((id) => [
+        id,
+        {
+          name: 'Tài khoản không còn hoạt động',
+          avatarUrl: undefined as string | undefined,
+        },
+      ])
+    );
+    if (!profiles.size) return profiles;
+    const users = await this.users.findActiveChatProfiles(ids);
+    for (const user of users)
+      profiles.set(user._id.toString(), {
+        name: user.fullName || 'Người dùng HEROS',
+        avatarUrl: user.avatarUrl,
       });
-    }
     return profiles;
   }
 

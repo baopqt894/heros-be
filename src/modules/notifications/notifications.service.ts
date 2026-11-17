@@ -53,7 +53,7 @@ export class NotificationsService {
       ...new Set(pushUserIds),
     ]);
     const result = await this.firebaseService.send(tokens, data, title);
-    const summary = `PUSH_DISPATCH type=${data.type || 'UNKNOWN'} users=${new Set(pushUserIds).size} tokens=${tokens.length} sent=${result.sent} failed=${result.failed} disabled=${result.disabled}`;
+    const summary = `PUSH_DISPATCH type=${data.type || 'UNKNOWN'} sosId=${data.sosId || 'none'} users=${new Set(pushUserIds).size} tokens=${tokens.length} sent=${result.sent} failed=${result.failed} disabled=${result.disabled}`;
     if (
       result.disabled ||
       result.failed ||
@@ -65,12 +65,9 @@ export class NotificationsService {
   }
 
   private async performDispatch(input: SosNotificationInput) {
-    const tokens = await this.devicesService.findPushTokens([
-      ...new Set(input.pushUserIds),
-    ]);
     const tasks: Promise<unknown>[] = [
-      this.firebaseService.send(
-        tokens,
+      this.performPush(
+        input.pushUserIds,
         {
           type: 'SOS_CREATED',
           sosId: input.eventId,
@@ -87,7 +84,10 @@ export class NotificationsService {
     ];
     const results = await Promise.allSettled(tasks);
     results.forEach((result) => {
-      if (result.status === 'rejected') this.logger.error(result.reason);
+      if (result.status === 'rejected')
+        this.logger.warn(
+          `SOS_NOTIFICATION_FAILED sosId=${input.eventId} reason=${result.reason instanceof Error ? result.reason.name : 'UNKNOWN'}`
+        );
     });
   }
 }

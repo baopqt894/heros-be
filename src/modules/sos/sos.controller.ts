@@ -102,6 +102,14 @@ export class SosController {
     };
   }
 
+  @Post(':id/decline')
+  async decline(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string
+  ) {
+    return { success: true, data: await this.sosService.decline(user.sub, id) };
+  }
+
   @Post(':id/recordings')
   @ApiConsumes('multipart/form-data')
   @ApiBody({

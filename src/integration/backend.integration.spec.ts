@@ -2049,6 +2049,73 @@ describe('Backend contracts against isolated MongoDB', () => {
     }
   });
 
+  it('records a decline once without joining chat or confirming rescue', async () => {
+    const contacts = app.get(getModelToken('EmergencyContact'));
+    const events = app.get(getModelToken('SosEvent'));
+    const link = await contacts.create({
+      ownerId: owner._id,
+      linkedUserId: contact._id,
+      invitationStatus: 'accepted',
+      name: 'Decline fixture',
+    });
+    const event = await chatFixture([
+      {
+        type: 'emergency_contact',
+        contactId: link._id,
+        userId: contact._id,
+        channels: ['push'],
+      },
+    ]);
+    const path = `/sos/${event.id}/decline`;
+    try {
+      expect((await request(path, 'POST', {}, outsiderToken)).status).toBe(404);
+      expect((await request(path, 'POST', {})).status).toBe(403);
+      const first = await request(path, 'POST', {}, contactToken);
+      expect(first.status).toBe(201);
+      expect(first.body.data).toMatchObject({
+        sosId: event.id,
+        declinedAt: expect.any(String),
+      });
+      expect((await request(path, 'POST', {}, contactToken)).body.data).toEqual(
+        first.body.data
+      );
+      const detail = await request(
+        `/sos/${event.id}`,
+        'GET',
+        undefined,
+        contactToken
+      );
+      expect(detail.body.data).toMatchObject({
+        status: 'active',
+        viewerDeclined: true,
+        viewerAcknowledged: false,
+        responderCount: 0,
+        chatId: null,
+      });
+      const ack = await request(
+        `/sos/${event.id}/acknowledge`,
+        'POST',
+        { supportMode: 'in_person' },
+        contactToken
+      );
+      expect(ack.status).toBe(409);
+      expect(ack.body.data.errorCode).toBe('SOS_ALREADY_DECLINED');
+      expect(
+        (
+          await request(
+            `/sos-chats/${event.id}`,
+            'GET',
+            undefined,
+            contactToken
+          )
+        ).status
+      ).toBe(403);
+    } finally {
+      await events.deleteOne({ _id: event._id });
+      await contacts.deleteOne({ _id: link._id });
+    }
+  });
+
   it('polls only the owned SOS for current, eligible rescue confirmations', async () => {
     const contacts = app.get(getModelToken('EmergencyContact'));
     const events = app.get(getModelToken('SosEvent'));
@@ -2089,6 +2156,14 @@ describe('Backend contracts against isolated MongoDB', () => {
         contactToken
       );
       expect(ack.status).toBe(201);
+      const decline = await request(
+        `/sos/${event.id}/decline`,
+        'POST',
+        {},
+        contactToken
+      );
+      expect(decline.status).toBe(409);
+      expect(decline.body.data.errorCode).toBe('SOS_ALREADY_ACKNOWLEDGED');
       expect((await poll()).body.data).toMatchObject({
         rescueStatus: 'RESPONDER_EN_ROUTE',
         hasInPersonResponder: true,

@@ -361,6 +361,9 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
     if (!existingRecipient) {
       throw new ForbiddenException({ code: 'SOS_RECIPIENT_REQUIRED' });
     }
+    if (existingRecipient.declinedAt) {
+      throw new ConflictException({ code: 'SOS_ALREADY_DECLINED' });
+    }
     if (existingRecipient.acknowledgedAt) {
       return this.toMobileResponse(existing, userId);
     }
@@ -373,6 +376,7 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
           $elemMatch: {
             userId: new Types.ObjectId(userId),
             acknowledgedAt: { $exists: false },
+            declinedAt: { $exists: false },
           },
         },
       },
@@ -390,13 +394,22 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
           {
             'recipient.userId': new Types.ObjectId(userId),
             'recipient.acknowledgedAt': { $exists: false },
+            'recipient.declinedAt': { $exists: false },
           },
         ],
         new: true,
       }
     );
     if (!event) {
-      event = await this.sosModel.findById(id);
+      event = await this.findAccessible(userId, id);
+      const recipient = event.recipients.find(
+        (r) => r.userId?.toString() === userId
+      );
+      if (recipient?.declinedAt)
+        throw new ConflictException({ code: 'SOS_ALREADY_DECLINED' });
+      if (recipient?.acknowledgedAt)
+        return this.toMobileResponse(event, userId);
+      throw new NotFoundException('Active SOS event not found');
     }
     if (!event) throw new NotFoundException('SOS event not found');
     const acknowledged = event.recipients.some(
@@ -429,6 +442,58 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
         ?.acknowledgedAt,
     });
     return this.toMobileResponse(event, userId);
+  }
+
+  async decline(userId: string, id: string) {
+    const recipientFor = (event: SosEventDocument) =>
+      event.recipients.find((r) => r.userId?.toString() === userId);
+    const existing = await this.findAccessible(userId, id);
+    const recipient = recipientFor(existing);
+    if (!recipient)
+      throw new ForbiddenException({ code: 'SOS_RECIPIENT_REQUIRED' });
+    if (recipient.declinedAt)
+      return { sosId: id, declinedAt: recipient.declinedAt };
+    if (recipient.acknowledgedAt)
+      throw new ConflictException({ code: 'SOS_ALREADY_ACKNOWLEDGED' });
+
+    const pending = {
+      userId: new Types.ObjectId(userId),
+      acknowledgedAt: { $exists: false },
+      declinedAt: { $exists: false },
+    };
+    const declinedAt = new Date();
+    const result = await this.sosModel.updateOne(
+      {
+        _id: id,
+        status: { $in: ACTIVE_STATUSES },
+        recipients: { $elemMatch: pending },
+      },
+      { $set: { 'recipients.$[recipient].declinedAt': declinedAt } },
+      {
+        arrayFilters: [
+          {
+            'recipient.userId': pending.userId,
+            'recipient.acknowledgedAt': pending.acknowledgedAt,
+            'recipient.declinedAt': pending.declinedAt,
+          },
+        ],
+      }
+    );
+    if (!result.modifiedCount) {
+      const current = recipientFor(await this.findAccessible(userId, id));
+      if (current?.declinedAt)
+        return { sosId: id, declinedAt: current.declinedAt };
+      if (current?.acknowledgedAt)
+        throw new ConflictException({ code: 'SOS_ALREADY_ACKNOWLEDGED' });
+      throw new NotFoundException('Active SOS event not found');
+    }
+    const payload = { sosId: id, userId, declinedAt };
+    await this.emitToUsers(
+      [existing.ownerId.toString(), userId],
+      'sos.declined',
+      payload
+    );
+    return { sosId: id, declinedAt };
   }
 
   async addRecording(
@@ -923,6 +988,11 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
               recipient.userId?.toString() === viewerId &&
               Boolean(recipient.acknowledgedAt)
           ),
+      viewerDeclined:
+        !isOwner &&
+        event.recipients.some(
+          (r) => r.userId?.toString() === viewerId && Boolean(r.declinedAt)
+        ),
     };
     if (isOwner || isRecipient) {
       response.currentLocation = event.currentLocation;
