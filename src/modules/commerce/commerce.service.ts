@@ -25,6 +25,7 @@ import { CreateOrderDto } from './commerce.dto';
 const hash = (value: string) =>
   createHash('sha256').update(value).digest('hex');
 const TERMINAL = ['PAID', 'CANCELLED', 'EXPIRED'];
+const UNIT_PRICE_VND = 960000;
 
 @Injectable()
 export class CommerceService {
@@ -117,7 +118,7 @@ export class CommerceService {
           accountId: new Types.ObjectId(userId),
           fingerprint,
           accessHash: hash(guestToken),
-          amount: input.quantity * 590000,
+          amount: input.quantity * UNIT_PRICE_VND,
           status: input.method === 'cod' ? 'COD_CONFIRMED' : 'CREATING',
           createdAt: new Date(),
         });
@@ -259,7 +260,13 @@ export class CommerceService {
       orderCode: order.orderCode,
       amount: order.amount,
       description: `HEROS ${order.orderCode}`,
-      items: [{ name: 'Heros', quantity: order.quantity, price: 590000 }],
+      items: [
+        {
+          name: 'Heros',
+          quantity: order.quantity,
+          price: order.amount / order.quantity,
+        },
+      ],
       returnUrl: callback,
       cancelUrl: callback,
       expiredAt: Math.floor(Date.now() / 1000) + 1800,

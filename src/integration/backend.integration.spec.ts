@@ -619,7 +619,7 @@ describe('Backend contracts against isolated MongoDB', () => {
     const created = await request('/commerce/orders', 'POST', input, web);
     expect(created.status).toBe(201);
     const code = created.body.data.order.orderCode;
-    expect(created.body.data.order.amount).toBe(1180000);
+    expect(created.body.data.order.amount).toBe(1920000);
     expect(created.body.data.order.status).toBe('COD_CONFIRMED');
     expect(
       (await request('/commerce/orders', 'POST', input, web)).body.data.created
@@ -862,8 +862,14 @@ describe('Backend contracts against isolated MongoDB', () => {
       ).toBe(400);
       const created = await request('/commerce/orders', 'POST', input);
       const order = created.body.data.order;
-      expect(order.amount).toBe(1180000);
+      expect(order.amount).toBe(1920000);
       expect(order.status).toBe('PENDING');
+      expect(paymentCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          amount: 1920000,
+          items: [{ name: 'Heros', quantity: 2, price: 960000 }],
+        })
+      );
       await request('/commerce/orders', 'POST', input);
       expect(paymentCreate).toHaveBeenCalledTimes(1);
       const state = {

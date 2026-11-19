@@ -65,7 +65,7 @@ Base `/v1`; response giữ `{success, code, data}`; mã lỗi ở `data.errorCod
 | `POST /commerce/orders/claim`            | Bearer                       | `orderCode`, `guestToken`; cần matching email và capability thật                         |
 | `POST /commerce/payos/webhook`           | Chữ ký payOS                 | Xác minh SDK và đối soát payment từ payOS trước cập nhật                                 |
 
-Backend tự tính giá 590.000đ/thiết bị, giao hàng 0đ, số lượng 1-10. Không nhận giá từ client. `requestId` chống tạo trùng và không được tái sử dụng với payload/account khác. Response tạo đơn có `order`, `created`, `syncPending`, `guestToken`. Không đưa `guestToken` vào log hoặc JavaScript; web lưu HttpOnly cookie.
+Backend tự tính giá 960.000đ/thiết bị cho đơn mới, giao hàng 0đ, số lượng 1-10. Đơn đã tạo giữ số tiền đã lưu. Đơn giá chi tiết gửi payOS lấy từ số tiền và số lượng của đơn. Không nhận giá từ client. `requestId` chống tạo trùng và không được tái sử dụng với payload/account khác. Response tạo đơn có `order`, `created`, `syncPending`, `guestToken`. Không đưa `guestToken` vào log hoặc JavaScript; web lưu HttpOnly cookie.
 
 payOS timeout không tạo đơn/link thứ hai: lần retry đối soát lại cùng order code. Đơn `PAID` không bị hạ trạng thái; COD không bao giờ được đánh dấu đã trả tiền bởi payOS. Xóa tài khoản dọn các đơn gắn account theo cơ chế worker hiện tại; cần chốt chính sách lưu chứng từ/backup trước triển khai vận hành thương mại.
 
