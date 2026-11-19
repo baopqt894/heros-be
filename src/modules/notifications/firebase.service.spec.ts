@@ -24,6 +24,32 @@ describe('FCM delivery', () => {
     jest.restoreAllMocks();
   });
 
+  it.each([
+    ['SOS_CREATED', 'heros_sos.wav'],
+    ['SOS_RESOLVED', 'default'],
+    ['SOS_RECORDING_AVAILABLE', 'default'],
+    ['SOS_CHAT_MESSAGE', 'default'],
+  ])(
+    'uses the expected Apple notification sound for %s',
+    async (type, sound) => {
+      global.fetch = jest
+        .fn()
+        .mockResolvedValue(new Response('{}', { status: 200 }));
+      expect(
+        await service.send(['device-token'], {
+          type,
+          sosId: 'test-sos',
+          message: 'Test',
+        })
+      ).toEqual({ sent: 1, failed: 0, disabled: false });
+      const request = (global.fetch as jest.Mock).mock.calls[0][1];
+      const message = JSON.parse(request.body).message;
+      expect(message.apns.payload.aps.sound).toBe(sound);
+      expect(message.android.notification.sound).toBe('default');
+      expect(message.data.type).toBe(type);
+    }
+  );
+
   it('uses visible high-priority alerts and separates resolved/audio notification groups', async () => {
     const requests: any[] = [];
     global.fetch = jest.fn(async (_url, init) => {

@@ -85,7 +85,12 @@ export class FirebaseService {
             'apns-priority': '10',
             'apns-collapse-id': notificationKey.slice(0, 64),
           },
-          payload: { aps: { sound: 'default', 'content-available': 1 } },
+          payload: {
+            aps: {
+              sound: data.type === 'SOS_CREATED' ? 'heros_sos.wav' : 'default',
+              'content-available': 1,
+            },
+          },
         },
       },
     });
@@ -118,7 +123,9 @@ export class FirebaseService {
           )?.errorCode || error.error?.status;
         if (typeof upstream === 'string' && /^[A-Z_]+$/.test(upstream))
           code = upstream;
-      } catch {}
+      } catch {
+        // Keep UNKNOWN when Firebase returns a non-JSON error response.
+      }
       const retryHeader = response.headers.get('Retry-After');
       const retrySeconds = Number(retryHeader);
       const retryMs = retryHeader
