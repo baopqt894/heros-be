@@ -94,8 +94,7 @@ describe('SosService response privacy', () => {
       }),
     });
     const result = await createService({ find }).listOwnerRecordings(
-      ownerId.toString(),
-      'https://heros.nextteam.site'
+      ownerId.toString()
     );
     expect(find).toHaveBeenCalledWith({
       ownerId: ownerId.toString(),

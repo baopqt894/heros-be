@@ -12,7 +12,7 @@ Bản sửa bổ sung contract tương thích cho riêng `GET /v1/sos/recordings
 
 - Bổ sung `title`, `recordedAt`, `fileURL`, `isEvidence: false` và `isOwnerOnly: true` theo model thư viện bản ghi của chủ tài khoản. Hai cờ boolean là giá trị khởi tạo để app decode, chưa có API lưu thay đổi đánh dấu bằng chứng hoặc cấu hình chia sẻ.
 - `durationSeconds` trả số nguyên làm tròn lên để decode vào Int. Giá trị gốc được giữ ở `durationSecondsExact`. Các API upload, chi tiết SOS và chat vẫn trả metadata thời lượng số thập phân.
-- `fileURL` là URL tuyệt đối của endpoint playback, vẫn cần Authorization Bearer. Origin lấy từ request qua reverse proxy. Giữ `playbackPath` và các field metadata cũ.
+- `fileURL` là URL tuyệt đối của endpoint playback, vẫn cần Authorization Bearer. Origin lấy từ APP_INVITE_BASE_URL hiện có (mặc định https://heros.nextteam.site) để tránh URL HTTP khi reverse proxy chuyển tiếp nội bộ bằng HTTP. Giữ `playbackPath` và các field metadata cũ.
 - `recordedAt` lấy từ `createdAt`; `recordedAt/expiresAt` trả chuỗi ISO-8601 có mili giây. Đã đối chiếu với custom date decoder `APICoding.makeDecoder()` do đội mobile cung cấp.
 - Đã chạy build, lint, 8 unit test và chương trình Swift dùng đúng model AudioRecord cùng date decoder APICoding đã nhận để decode JSON tạo từ code backend mới. Tất cả thành công. Cần deploy commit chứa bản sửa này trước khi mobile kiểm tra production.
 

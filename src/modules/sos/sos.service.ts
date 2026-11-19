@@ -50,6 +50,7 @@ const RECORDING_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 export class SosService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(SosService.name);
   private readonly recordingsDirectory: string;
+  private readonly publicApiOrigin: string;
   private cleanupTimer?: ReturnType<typeof setInterval>;
   private cleanupRunning = false;
   private cleanupStatus = { lastSuccessAt: null as string | null, failures: 0 };
@@ -63,6 +64,10 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
     private readonly gateway: SosGateway,
     config: ConfigService
   ) {
+    this.publicApiOrigin = new URL(
+      config.get<string>('APP_INVITE_BASE_URL') ||
+        'https://heros.nextteam.site/invite'
+    ).origin;
     this.recordingsDirectory =
       config.get<string>('SOS_RECORDINGS_DIR') ||
       join(process.cwd(), 'private_uploads', 'sos-recordings');
@@ -696,7 +701,7 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  async listOwnerRecordings(ownerId: string, apiOrigin: string) {
+  async listOwnerRecordings(ownerId: string) {
     const events = await this.sosModel
       .find({ ownerId, 'recordings.0': { $exists: true } })
       .sort({ startedAt: -1 })
@@ -719,7 +724,10 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
             durationSeconds: Math.ceil(recording.durationSeconds),
             durationSecondsExact: recording.durationSeconds,
             recordedAt: recording.createdAt,
-            fileURL: new URL(metadata.playbackPath, apiOrigin).toString(),
+            fileURL: new URL(
+              metadata.playbackPath,
+              this.publicApiOrigin
+            ).toString(),
             isEvidence: false,
             isOwnerOnly: true,
           };
