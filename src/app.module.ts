@@ -14,6 +14,7 @@ import { HealthController } from './modules/health/health.controller';
 import { HardwareDevicesModule } from './modules/hardware-devices/hardware-devices.module';
 import { AccountModule } from './modules/account/account.module';
 import { CommerceModule } from './modules/commerce/commerce.module';
+import { ContactModule } from './modules/contact/contact.module';
 
 @Module({
   imports: [
@@ -73,6 +74,7 @@ import { CommerceModule } from './modules/commerce/commerce.module';
     SosModule,
     AccountModule,
     CommerceModule,
+    ContactModule,
   ],
   controllers: [HealthController],
   providers: [
