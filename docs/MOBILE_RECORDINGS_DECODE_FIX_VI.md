@@ -146,6 +146,21 @@ Khi bấm nghe, ghép `playbackPath` với origin `https://heros.nextteam.site`.
 
 API metadata đang lưu `durationSeconds` do client gửi. Ba WAV đã kiểm tra có thời lượng thực khác field này. Player nên dùng duration đọc từ file sau khi mở thành công để hiển thị tiến trình phát.
 
+## Tối ưu thời gian chờ khi bấm Play
+
+Backend playback chỉ đọc metadata của clip được yêu cầu cùng các field kiểm tra quyền. Với chính chủ, bỏ hai truy vấn kiểm tra liên hệ khẩn cấp vì quyền sở hữu đã xác định từ SOS và JWT. Người hỗ trợ vẫn được kiểm tra liên kết ở mỗi request, kể cả request Range tiếp theo.
+
+Backend truyền file bằng stream và hỗ trợ Range. Hiệu quả về thời gian thực tế cần đo lại sau deploy trên mạng/thiết bị của người dùng.
+
+Mobile cần kiểm tra luồng tải:
+
+- Mở danh sách chỉ tải JSON metadata. Khi bấm Play mới tải clip đã chọn.
+- Gộp các lượt bấm cùng clip đang tải vào một request, thay vì tạo nhiều download song song. Hiện trạng thái “Đang tải” và cho phép hủy.
+- Hủy request clip trước khi chuyển sang clip khác nếu app không còn dùng kết quả đó.
+- Nếu đã có file tạm còn hợp lệ trong phiên mở màn, có thể dùng lại theo quyền hiện tại; khi logout, thu hồi liên kết hoặc SOS đóng đối với người hỗ trợ thì dừng player và dọn dữ liệu.
+- Đo riêng thời gian nhận header và thời gian tải xong, log HTTP status, số byte và clip ID. Không log JWT hoặc dữ liệu audio. Nếu header về chậm, rà mạng/server/database. Nếu header nhanh nhưng nhận hết file chậm, rà băng thông, request bị lặp và cách đọc stream ở app.
+- WAV đã kiểm tra chỉ khoảng 98–178 KB. Việc nén file thêm cần cân nhắc sau khi xác định bước đang chậm và có bản ghi chứa tiếng mic rõ.
+
 ## 5. Checklist test mobile
 
 - API danh sách có data rỗng, một item và nhiều item đều decode được.

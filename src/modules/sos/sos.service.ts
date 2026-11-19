@@ -648,9 +648,15 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
   ) {
     this.assertObjectId(id);
     this.assertObjectId(recordingId);
-    const event = await this.sosModel.findById(id);
+    const event = await this.sosModel.findById(id, {
+      ownerId: 1,
+      status: 1,
+      recipients: 1,
+      recordings: { $elemMatch: { _id: new Types.ObjectId(recordingId) } },
+    });
     if (!event) throw new NotFoundException('SOS event not found');
-    await this.filterRecipients(event);
+    // Owner access is independent of contact links; avoid two extra queries per clip.
+    if (event.ownerId.toString() !== userId) await this.filterRecipients(event);
     if (!this.canAccessSensitive(event, userId)) {
       throw new ForbiddenException({ code: 'SOS_ACKNOWLEDGEMENT_REQUIRED' });
     }

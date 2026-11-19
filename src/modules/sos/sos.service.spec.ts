@@ -148,8 +148,9 @@ describe('SosService response privacy', () => {
   });
 
   it('blocks recording playback before the recipient accepts', async () => {
+    const service = createService();
     await expect(
-      createService().openRecording(
+      service.openRecording(
         recipientId.toString(),
         eventId.toString(),
         new Types.ObjectId().toString()
@@ -157,6 +158,31 @@ describe('SosService response privacy', () => {
     ).rejects.toMatchObject({
       response: { code: 'SOS_ACKNOWLEDGEMENT_REQUIRED' },
     });
+    expect(
+      (service as any).contactsService.filterSosRecipients
+    ).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips contact queries when the owner requests a recording', async () => {
+    const recordingId = new Types.ObjectId();
+    const findById = jest.fn().mockResolvedValue(event);
+    const service = createService({ findById });
+    await expect(
+      service.openRecording(
+        ownerId.toString(),
+        eventId.toString(),
+        recordingId.toString()
+      )
+    ).rejects.toMatchObject({ message: 'SOS recording not found' });
+    expect(findById).toHaveBeenCalledWith(eventId.toString(), {
+      ownerId: 1,
+      status: 1,
+      recipients: 1,
+      recordings: { $elemMatch: { _id: recordingId } },
+    });
+    expect(
+      (service as any).contactsService.filterSosRecipients
+    ).not.toHaveBeenCalled();
   });
 
   it('revokes recipient recording access after the owner resolves the SOS', async () => {
