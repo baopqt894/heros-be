@@ -55,10 +55,16 @@ export class SosController {
   }
 
   @Get('recordings')
-  async recordings(@CurrentUser() user: AuthenticatedUser) {
+  async recordings(
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() request: Request
+  ) {
     return {
       success: true,
-      data: await this.sosService.listOwnerRecordings(user.sub),
+      data: await this.sosService.listOwnerRecordings(
+        user.sub,
+        `${request.protocol}://${request.get('host')}`
+      ),
     };
   }
 

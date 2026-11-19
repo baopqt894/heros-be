@@ -5,7 +5,9 @@ It covers invitation links, deployment configuration, TestFlight, App Review and
 
 ## Response envelope
 
-Decode every HTTP response with the same top-level structure:
+Decode JSON API responses with the following top-level structure. Successful
+recording playback responses contain audio bytes (HTTP 200/206). Check HTTP
+status and Content-Type before choosing a JSON decoder or audio player.
 
 ```json
 {
@@ -324,7 +326,7 @@ durationSeconds=8.4
 Supported types are AAC, M4A/MP4 audio, MP3, OGG and WAV. A clip is limited to
 10 MiB, and the declared duration must not exceed 120 seconds. The server
 validates both the declared MIME type and the file signature. One SOS accepts
-up to 20 clips and 100 MiB of audio in total.
+up to 600 clips and 100 MiB of audio in total.
 
 An acknowledged helper streams a clip using its `playbackPath`, for example:
 
@@ -338,3 +340,7 @@ owner or a recipient who has already acknowledged an active SOS. Access for the
 recipient ends immediately after resolve/cancel. Owners use `GET /v1/sos/recordings`
 for their library and `DELETE /v1/sos/:id/recordings/:recordingId` to remove a
 clip. Remaining clips expire from the server after 30 days.
+
+For `GET /v1/sos/recordings`, `data` is an array of owner recording items.
+The AudioRecord compatibility update returns integer `durationSeconds` in the owner library, preserves the original value in `durationSecondsExact`, and adds `title/recordedAt/fileURL/isEvidence/isOwnerOnly`. Other recording metadata endpoints retain floating-point durations. IDs use `id`; timestamps include fractional seconds supported by the mobile APICoding decoder. Use the exact model and response example in
+[Recording decode troubleshooting](MOBILE_RECORDINGS_DECODE_FIX_VI.md).

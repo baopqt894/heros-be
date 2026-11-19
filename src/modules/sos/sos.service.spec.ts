@@ -72,6 +72,48 @@ describe('SosService response privacy', () => {
     expect(result).toHaveProperty('currentLocation');
   });
 
+  it('returns the owner recording library in the mobile AudioRecord shape', async () => {
+    const createdAt = new Date();
+    const recordingId = new Types.ObjectId();
+    const find = jest.fn().mockReturnValue({
+      sort: jest.fn().mockReturnValue({
+        exec: jest.fn().mockResolvedValue([
+          {
+            ...event,
+            recordings: [
+              {
+                _id: recordingId,
+                mimeType: 'audio/wav',
+                sizeBytes: 178220,
+                durationSeconds: 10.3,
+                createdAt,
+              },
+            ],
+          },
+        ]),
+      }),
+    });
+    const result = await createService({ find }).listOwnerRecordings(
+      ownerId.toString(),
+      'https://heros.nextteam.site'
+    );
+    expect(find).toHaveBeenCalledWith({
+      ownerId: ownerId.toString(),
+      'recordings.0': { $exists: true },
+    });
+    expect(result[0]).toMatchObject({
+      title: 'Bản ghi SOS SOS-ABC12345',
+      durationSeconds: 11,
+      durationSecondsExact: 10.3,
+      recordedAt: createdAt,
+      fileURL: `https://heros.nextteam.site/v1/sos/${eventId}/recordings/${recordingId}`,
+      isEvidence: false,
+      isOwnerOnly: true,
+      mimeType: 'audio/wav',
+    });
+    expect(result[0].expiresAt).toBeInstanceOf(Date);
+  });
+
   it('returns live location and recordings after the recipient accepts', async () => {
     const recordingId = new Types.ObjectId();
     const acceptedEvent = {

@@ -696,7 +696,7 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  async listOwnerRecordings(ownerId: string) {
+  async listOwnerRecordings(ownerId: string, apiOrigin: string) {
     const events = await this.sosModel
       .find({ ownerId, 'recordings.0': { $exists: true } })
       .sort({ startedAt: -1 })
@@ -704,13 +704,26 @@ export class SosService implements OnModuleInit, OnModuleDestroy {
     return events.flatMap((event) =>
       (event.recordings || [])
         .filter((recording) => this.recordingUnexpired(recording))
-        .map((recording) => ({
-          sosId: event._id,
-          sosCode: event.code,
-          sosStatus: event.status,
-          startedAt: event.startedAt,
-          ...this.recordingResponse(event._id.toString(), recording),
-        }))
+        .map((recording) => {
+          const metadata = this.recordingResponse(
+            event._id.toString(),
+            recording
+          );
+          return {
+            sosId: event._id,
+            sosCode: event.code,
+            sosStatus: event.status,
+            startedAt: event.startedAt,
+            ...metadata,
+            title: `Bản ghi SOS ${event.code}`,
+            durationSeconds: Math.ceil(recording.durationSeconds),
+            durationSecondsExact: recording.durationSeconds,
+            recordedAt: recording.createdAt,
+            fileURL: new URL(metadata.playbackPath, apiOrigin).toString(),
+            isEvidence: false,
+            isOwnerOnly: true,
+          };
+        })
     );
   }
 

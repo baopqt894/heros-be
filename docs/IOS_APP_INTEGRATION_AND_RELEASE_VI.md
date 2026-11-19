@@ -259,6 +259,8 @@ GPS GeoJSON `coordinates` có thứ tự `[longitude, latitude]`. Reconnect ph�
 
 Owner `GET /sos/recordings` và `DELETE /sos/{id}/recordings/{recordingId}`. Nếu muốn giữ bằng chứng lâu hơn server retention thì app owner phải chủ động tải/lưu bản local với file protection và consent; backend không tự sao chép xuống điện thoại. Xóa server không tự xóa bản export của owner.
 
+`GET /sos/recordings` trả `data` là mảng trực tiếp. Bản sửa tương thích AudioRecord bổ sung `title/recordedAt/fileURL/isEvidence/isOwnerOnly`, trả `durationSeconds` là số nguyên làm tròn lên và `durationSecondsExact` là thời lượng gốc. ID dùng `id`, đường dẫn phát tương đối dùng `playbackPath`, ngày giờ có mili giây và phù hợp custom decoder APICoding của mobile. Item trong chi tiết SOS/nhóm chat chỉ gồm metadata ghi âm; item danh sách owner có thêm `sosId`, `sosCode`, `sosStatus`, `startedAt`. Xem [model Swift, JSON thực tế và log field decode lỗi](MOBILE_RECORDINGS_DECODE_FIX_VI.md).
+
 Recipient không có nút tải/chia sẻ; không cache vào thư mục public/backup. Dừng phát khi phát hiện screen capture theo API phù hợp iOS deployment target. Không thể cam kết tuyệt đối mọi video quay màn hình đều không tiếng hay người nghe không thu lại được. Cần QA trên máy thật, không dùng thủ thuật private API che view để né capture.
 
 SMS: backend trả `smsPayload.recipients/message`; app dùng composer, người dùng xác nhận gửi. `PUT /sos/{id}/sms-status` nhận `composer_opened` hoặc `user_reported_sent`, không phải delivery receipt. Gọi người thân bằng `tel:` theo thao tác người dùng. Device gọi server không làm iPhone tự gửi SMS/gọi; trường hợp đó dùng FCM/email, hoặc cần SMS/voice provider server riêng.
