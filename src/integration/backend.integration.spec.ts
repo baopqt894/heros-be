@@ -976,6 +976,43 @@ describe('Backend contracts against isolated MongoDB', () => {
     );
   });
 
+  it('rebinds a disabled FCM token after an account switch and tolerates concurrent registration', async () => {
+    const devices = app.get(getModelToken('Device'));
+    const pushToken = 'account-switch-token-for-test';
+    const old = await devices.create({
+      userId: contact._id,
+      deviceId: 'new-phone',
+      pushToken,
+      platform: 'ios',
+      enabled: false,
+      sessionKey: 'old-contact-session',
+      lastSeenAt: new Date(),
+    });
+    const current = await devices.create({
+      userId: owner._id,
+      deviceId: 'new-phone',
+      pushToken: 'previous-owner-token-for-test',
+      platform: 'ios',
+      enabled: false,
+      lastSeenAt: new Date(),
+    });
+    try {
+      const register = () => request('/me/devices', 'POST', {
+        deviceId: 'new-phone', platform: 'ios', pushToken,
+      });
+      const responses = await Promise.all([register(), register()]);
+      expect(responses.map((r) => r.status)).toEqual([201, 201]);
+      const records = await devices.find({ pushToken });
+      expect(records).toHaveLength(1);
+      expect(records[0].userId.toString()).toBe(owner.id);
+      expect(records[0].enabled).toBe(true);
+      expect(await app.get(DevicesService).findPushTokens([owner.id])).toContain(pushToken);
+      expect(await app.get(DevicesService).findPushTokens([contact.id])).not.toContain(pushToken);
+    } finally {
+      await devices.deleteMany({ _id: { $in: [old._id, current._id] } });
+    }
+  });
+
   it('generates a one-time email code bound to the requested phone, without claiming SMS verification', async () => {
     const challenge = await request('/me/phone/request-otp', 'POST', {
       phone: '+84901234567',

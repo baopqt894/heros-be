@@ -46,3 +46,15 @@ Nếu request thất bại do mất mạng, mobile phải retry sau khi có mạ
 
 Sau khi thấy đăng ký thành công, gửi một thông báo TEST đến token đang lưu rồi kiểm tra trên điện thoại.
 Không tự tạo SOS thật chỉ để kiểm tra token. Cơ chế nhập mã email/QR không liên quan phần đăng ký push này.
+
+## FCM token trùng khi chuyển tài khoản trên cùng điện thoại
+
+FCM token có thể giữ nguyên khi logout tài khoản A rồi login tài khoản B.
+Index unique của `devices.pushToken` vẫn áp dụng cho bản ghi A đã `enabled: false`.
+Bản backend cũ có thể trả 500 khi B đăng ký token đó.
+
+Bản sửa xử lý lỗi duplicate key bằng cách xóa duy nhất binding token đang xung đột ở tài khoản/installation khác rồi retry upsert một lần cho phiên đang được xác thực. Request đăng ký vẫn phải có installation ID trùng phiên JWT. Token chỉ có một binding sau chuyển tài khoản; tài khoản cũ không còn nhận push qua token đó.
+
+Deploy bản sửa rồi gọi lại `POST /v1/me/devices` với FCM token hiện tại. Không cần đổi token trong Firebase Console. Kiểm tra HTTP 201 và log `PUSH_TOKEN_REGISTERED`. Các lỗi còn lại có thêm `mongoCode`; duplicate key ghi `reason=DUPLICATE_KEY`. Log tiếp tục dùng fingerprint và không in token/session thật.
+
+Đã test trên MongoDB tạm với token cũ bị disable, tài khoản đích đã có registration khác và hai request đăng ký đồng thời.

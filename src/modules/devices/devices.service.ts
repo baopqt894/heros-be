@@ -21,23 +21,40 @@ export class DevicesService {
         .findOne({ userId, deviceId: dto.deviceId })
         .select('pushToken sessionKey enabled')
         .lean();
-      const device = await this.deviceModel.findOneAndUpdate(
-        { userId, deviceId: dto.deviceId },
-        {
-          $set: {
-            platform: dto.platform,
-            sessionKey,
-            pushToken: dto.pushToken,
-            enabled: true,
-            lastSeenAt: new Date(),
+      const registration = () =>
+        this.deviceModel.findOneAndUpdate(
+          { userId, deviceId: dto.deviceId },
+          {
+            $set: {
+              platform: dto.platform,
+              sessionKey,
+              pushToken: dto.pushToken,
+              enabled: true,
+              lastSeenAt: new Date(),
+            },
+            $setOnInsert: {
+              userId: new Types.ObjectId(userId),
+              deviceId: dto.deviceId,
+            },
           },
-          $setOnInsert: {
-            userId: new Types.ObjectId(userId),
-            deviceId: dto.deviceId,
-          },
-        },
-        { new: true, upsert: true, runValidators: true }
-      );
+          { new: true, upsert: true, runValidators: true }
+        );
+      let device: DeviceDocument;
+      try {
+        device = await registration();
+      } catch (error) {
+        if (error?.code !== 11000) throw error;
+        // FCM tokens survive account switches. Remove only a conflicting token
+        // binding, then retry the normal upsert for this authenticated session.
+        await this.deviceModel.deleteOne({
+          pushToken: dto.pushToken,
+          $or: [
+            { userId: { $ne: new Types.ObjectId(userId) } },
+            { deviceId: { $ne: dto.deviceId } },
+          ],
+        });
+        device = await registration();
+      }
       const tokenState = !previous
         ? 'new'
         : previous.pushToken === dto.pushToken
@@ -49,7 +66,7 @@ export class DevicesService {
       return device;
     } catch (error) {
       this.logger.warn(
-        `PUSH_TOKEN_REGISTER_FAILED ${context} reason=DATABASE_OPERATION_FAILED`
+        `PUSH_TOKEN_REGISTER_FAILED ${context} reason=${error?.code === 11000 ? 'DUPLICATE_KEY' : 'DATABASE_OPERATION_FAILED'} mongoCode=${typeof error?.code === 'number' ? error.code : 'unknown'}`
       );
       throw error;
     }
